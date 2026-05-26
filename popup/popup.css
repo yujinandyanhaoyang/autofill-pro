@@ -1,0 +1,133 @@
+:root {
+  color-scheme: light;
+  --bg: #f4efe7;
+  --panel: #fffdf8;
+  --line: #d8cab5;
+  --ink: #24180d;
+  --muted: #6e5a45;
+  --accent: #b65b2d;
+  --accent-strong: #94431b;
+  --danger: #9f2d23;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(circle at top right, rgba(182, 91, 45, 0.12), transparent 38%),
+    linear-gradient(180deg, #f8f4ed 0%, var(--bg) 100%);
+  color: var(--ink);
+  font: 13px/1.4 "Segoe UI", sans-serif;
+}
+
+.panel {
+  width: 380px;
+  padding: 14px;
+}
+
+.hero h1,
+.section-head h2 {
+  margin: 0;
+  font: 700 18px/1.2 Georgia, "Times New Roman", serif;
+}
+
+.eyebrow {
+  margin: 0 0 4px;
+  color: var(--accent-strong);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.muted,
+.status {
+  color: var(--muted);
+}
+
+.card {
+  margin-top: 12px;
+  padding: 12px;
+  background: rgba(255, 253, 248, 0.9);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+label,
+.field {
+  display: block;
+  margin-bottom: 8px;
+}
+
+input,
+select,
+textarea,
+button {
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  padding: 9px 10px;
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+  background: #fff8ef;
+  color: var(--ink);
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+button.danger {
+  color: #fff;
+  background: var(--danger);
+  border-color: var(--danger);
+}
+
+button.ghost {
+  width: auto;
+  padding: 6px 10px;
+  background: transparent;
+}
+
+.actions,
+.section-head {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.field-editor {
+  display: grid;
+  gap: 10px;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.field small {
+  display: block;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.checkbox input {
+  width: auto;
+}
+
+.status {
+  min-height: 18px;
+  margin: 10px 2px 0;
+}

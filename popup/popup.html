@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Autofill Pro</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="panel">
+      <header class="hero">
+        <p class="eyebrow">Autofill Pro</p>
+        <h1>Save once, fill again</h1>
+        <p id="pageMeta" class="muted"></p>
+      </header>
+
+      <section class="card">
+        <label for="presetName">Preset name</label>
+        <input id="presetName" type="text" placeholder="Example: Daily procurement form">
+        <button id="captureBtn" class="primary">Capture current page</button>
+      </section>
+
+      <section class="card">
+        <label for="presetSelect">Saved presets for this page</label>
+        <select id="presetSelect"></select>
+
+        <div class="actions">
+          <button id="fillBtn" class="primary">Fill page</button>
+          <button id="saveBtn">Save edits</button>
+          <button id="deleteBtn" class="danger">Delete</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="section-head">
+          <h2>Quick edits</h2>
+          <button id="manageBtn" class="ghost">Manage all</button>
+        </div>
+        <div id="fieldEditor" class="field-editor"></div>
+      </section>
+
+      <section class="card">
+        <div class="section-head">
+          <h2>Diagnostics</h2>
+        </div>
+        <button id="inspectBtn">Export DOM snapshot</button>
+      </section>
+
+      <p id="status" class="status"></p>
+    </main>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

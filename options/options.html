@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Autofill Pro Presets</title>
+    <link rel="stylesheet" href="options.css">
+  </head>
+  <body>
+    <main class="layout">
+      <header>
+        <p class="eyebrow">Autofill Pro</p>
+        <h1>Preset Manager</h1>
+        <p>All presets stay in `chrome.storage.local`. Export regularly if this data matters.</p>
+      </header>
+
+      <section class="toolbar">
+        <button id="exportBtn">Export JSON</button>
+        <label class="import">
+          <span>Import JSON</span>
+          <input id="importInput" type="file" accept="application/json">
+        </label>
+      </section>
+
+      <section>
+        <div id="presetList" class="preset-list"></div>
+      </section>
+    </main>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

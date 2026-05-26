@@ -1,0 +1,103 @@
+:root {
+  --bg: #f7f2ea;
+  --panel: #fffdf9;
+  --line: #d9ccb9;
+  --ink: #24180d;
+  --muted: #6e5a45;
+  --accent: #b65b2d;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(circle at top right, rgba(182, 91, 45, 0.1), transparent 35%),
+    var(--bg);
+  color: var(--ink);
+  font: 14px/1.5 "Segoe UI", sans-serif;
+}
+
+.layout {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 28px 20px 60px;
+}
+
+h1 {
+  margin: 0;
+  font: 700 34px/1.1 Georgia, "Times New Roman", serif;
+}
+
+.eyebrow {
+  margin: 0 0 6px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.toolbar {
+  display: flex;
+  gap: 12px;
+  margin: 18px 0 24px;
+}
+
+button,
+.import span {
+  display: inline-block;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 10px 14px;
+  background: var(--panel);
+  cursor: pointer;
+  font: inherit;
+}
+
+.import input {
+  display: none;
+}
+
+.preset-list {
+  display: grid;
+  gap: 14px;
+}
+
+.card {
+  padding: 16px;
+  background: rgba(255, 253, 249, 0.92);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+}
+
+.card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.card p {
+  margin: 6px 0;
+  color: var(--muted);
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+textarea,
+input[type="text"] {
+  width: 100%;
+  margin-top: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font: inherit;
+  background: #fff;
+}
