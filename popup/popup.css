@@ -48,6 +48,10 @@ body {
   color: var(--muted);
 }
 
+.compact {
+  margin: 0 0 10px;
+}
+
 .card {
   margin-top: 12px;
   padding: 12px;

@@ -5,6 +5,7 @@ Autofill Pro is a local-first Chrome extension MVP for repetitive enterprise web
 ## What it does
 
 - Captures text, number, date, textarea, select, multi-select, checkbox, radio, and contenteditable fields
+- Captures structured groups for repeatable rows, multi-value tag fields, and cascader-plus-detail pairs
 - Saves presets per page path in `chrome.storage.local`
 - Lets you edit saved values before refilling
 - Supports export and import of all presets
@@ -23,6 +24,10 @@ Autofill Pro is a local-first Chrome extension MVP for repetitive enterprise web
 3. Enter a preset name and click `Capture current page`
 4. On the next visit, select that preset and click `Fill page`
 5. Edit the 3-4 differing fields in the popup, then click `Save edits`
+
+Each capture now also exports a DOM snapshot JSON with a `capture-` prefix. Manual diagnostic exports keep the `inspect-` prefix so plugin-filled pages and hand-filled pages can be compared directly.
+
+If you captured presets before the structured template upgrade, recapture them. Old presets remain readable but do not include the new group model.
 
 ## Capture a real form page for analysis
 
@@ -45,6 +50,7 @@ Use that file to inspect stable labels, names, ids, nested table patterns, and c
 
 - Matching is strongest on the same page structure and URL path
 - Rich custom component libraries may require page-specific matching improvements
+- Complex groups are filled but only basic fields are editable in the popup
 - Password and file fields are intentionally excluded
 
 ## Why this design

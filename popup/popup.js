@@ -5,6 +5,7 @@ const elements = {
   presetName: document.getElementById("presetName"),
   presetSelect: document.getElementById("presetSelect"),
   fieldEditor: document.getElementById("fieldEditor"),
+  groupSummary: document.getElementById("groupSummary"),
   status: document.getElementById("status"),
   captureBtn: document.getElementById("captureBtn"),
   fillBtn: document.getElementById("fillBtn"),
@@ -63,7 +64,9 @@ function renderPresetSelect() {
   for (const preset of presets) {
     const option = document.createElement("option");
     option.value = preset.id;
-    option.textContent = `${preset.name} (${preset.fields.length})`;
+    const editableCount = getEditableFields(preset).length;
+    const groupCount = Array.isArray(preset.groups) ? preset.groups.length : 0;
+    option.textContent = `${preset.name} (${editableCount} fields, ${groupCount} groups)`;
     elements.presetSelect.append(option);
   }
 }
@@ -71,14 +74,20 @@ function renderPresetSelect() {
 function renderSelectedPreset() {
   const preset = getSelectedPreset();
   elements.fieldEditor.innerHTML = "";
+  elements.groupSummary.textContent = "";
 
   if (!preset) {
     return;
   }
 
   elements.presetName.value = preset.name;
+  const editableFields = getEditableFields(preset);
+  const groups = Array.isArray(preset.groups) ? preset.groups : [];
+  if (groups.length) {
+    elements.groupSummary.textContent = `${groups.length} structured group${groups.length === 1 ? "" : "s"} captured. Complex groups fill normally but are not editable here.`;
+  }
 
-  for (const [index, field] of preset.fields.entries()) {
+  for (const [index, field] of editableFields.entries()) {
     const wrapper = document.createElement("label");
     wrapper.className = field.type === "checkbox" ? "field checkbox" : "field";
 
@@ -121,7 +130,8 @@ function buildEditorInput(field, index) {
 
 async function capturePreset() {
   const data = await sendToPage({ type: "capturePage" });
-  if (!data.fields.length) {
+  const editableFields = getEditableFields(data);
+  if (!editableFields.length && !(data.groups || []).length) {
     setStatus("No supported fields found on this page.", true);
     return;
   }
@@ -129,13 +139,15 @@ async function capturePreset() {
   const name = elements.presetName.value.trim() || `${data.title || "Preset"} ${new Date().toLocaleString()}`;
   const record = {
     id: crypto.randomUUID(),
+    version: data.version || 1,
     name,
     fingerprint: data.fingerprint,
     url: data.url,
     title: data.title,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-    fields: data.fields
+    simpleFields: data.simpleFields || data.fields || [],
+    groups: data.groups || []
   };
 
   const stored = await chrome.storage.local.get(STORAGE_KEY);
@@ -146,7 +158,8 @@ async function capturePreset() {
   await loadPresets();
   elements.presetSelect.value = record.id;
   renderSelectedPreset();
-  setStatus(`Captured ${record.fields.length} fields into "${record.name}".`);
+  await exportSnapshot("capture");
+  setStatus(`Captured ${record.simpleFields.length} editable fields and ${record.groups.length} structured groups into "${record.name}".`);
 }
 
 async function fillSelectedPreset() {
@@ -156,7 +169,11 @@ async function fillSelectedPreset() {
     return;
   }
 
-  await sendToPage({ type: "fillPage", preset });
+  const result = await sendToPage({ type: "fillPage", preset });
+  if (result?.failures?.length) {
+    setStatus(`Filled with warnings. Failed: ${result.failures.join(", ")}`, true);
+    return;
+  }
   setStatus(`Filled page with "${preset.name}".`);
 }
 
@@ -170,19 +187,22 @@ async function saveEditedPreset() {
   const next = structuredClone(preset);
   next.name = elements.presetName.value.trim() || next.name;
   next.updatedAt = new Date().toISOString();
+  if (!Array.isArray(next.simpleFields)) {
+    next.simpleFields = Array.isArray(next.fields) ? structuredClone(next.fields) : [];
+  }
 
   for (const editor of elements.fieldEditor.querySelectorAll("[data-index]")) {
     const index = Number(editor.dataset.index);
     const kind = editor.dataset.kind;
     if (kind === "boolean") {
-      next.fields[index].value = editor.checked;
+      next.simpleFields[index].value = editor.checked;
     } else if (kind === "list") {
-      next.fields[index].value = editor.value
+      next.simpleFields[index].value = editor.value
         .split(",")
         .map((part) => part.trim())
         .filter(Boolean);
     } else {
-      next.fields[index].value = editor.value;
+      next.simpleFields[index].value = editor.value;
     }
   }
 
@@ -208,17 +228,7 @@ async function deleteSelectedPreset() {
 }
 
 async function exportInspectionSnapshot() {
-  const inspection = await sendToPage({ type: "inspectPage" });
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const slug = slugify(inspection.title || "page");
-  const filename = `autofill-pro-${slug}-${stamp}.json`;
-  const blob = new Blob([JSON.stringify(inspection, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  link.click();
-  URL.revokeObjectURL(url);
+  const filename = await exportSnapshot("inspect");
   setStatus(`Exported DOM snapshot to ${filename}.`);
 }
 
@@ -232,6 +242,13 @@ function getSelectedPreset() {
   return presets.find((preset) => preset.id === elements.presetSelect.value) || null;
 }
 
+function getEditableFields(preset) {
+  if (Array.isArray(preset?.simpleFields)) {
+    return preset.simpleFields;
+  }
+  return Array.isArray(preset?.fields) ? preset.fields : [];
+}
+
 function setStatus(message, isError = false) {
   elements.status.textContent = message;
   elements.status.style.color = isError ? "#9f2d23" : "";
@@ -239,6 +256,21 @@ function setStatus(message, isError = false) {
 
 async function sendToPage(message) {
   return chrome.tabs.sendMessage(currentTabId, message);
+}
+
+async function exportSnapshot(prefix) {
+  const inspection = await sendToPage({ type: "inspectPage" });
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const slug = slugify(inspection.title || "page");
+  const filename = `autofill-pro-${prefix}-${slug}-${stamp}.json`;
+  const blob = new Blob([JSON.stringify(inspection, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+  return filename;
 }
 
 function slugify(value) {

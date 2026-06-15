@@ -1,5 +1,7 @@
 (function () {
-  const STORAGE_KEY = "presets";
+  const TEMPLATE_VERSION = 2;
+  const FIELD_SELECTOR = "input, select, textarea, [contenteditable='true']";
+  const FIELD_CONTAINER_SELECTOR = ".muya-formitem-input-wrapper, .muya-formitem-wrapper, td, th, label, form, section";
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type === "capturePage") {
@@ -9,7 +11,7 @@
 
     if (message?.type === "fillPage") {
       fillPage(message.preset)
-        .then(() => sendResponse({ ok: true }))
+        .then((result) => sendResponse(result))
         .catch((error) => sendResponse({ ok: false, error: error.message }));
       return true;
     }
@@ -40,22 +42,15 @@
   }
 
   function capturePage() {
+    const template = buildPresetTemplate();
     return {
       ...getPageMeta(),
-      fields: collectFields()
+      ...template
     };
   }
 
   function inspectPage() {
-    const forms = Array.from(document.forms).map((form, index) => ({
-      index,
-      id: form.id || "",
-      name: form.getAttribute("name") || "",
-      action: form.getAttribute("action") || "",
-      method: form.getAttribute("method") || "get",
-      fieldCount: form.querySelectorAll("input, select, textarea, [contenteditable='true']").length
-    }));
-
+    const template = buildPresetTemplate(true);
     return {
       capturedAt: new Date().toISOString(),
       meta: {
@@ -70,53 +65,302 @@
         textareas: document.querySelectorAll("textarea").length,
         contenteditables: document.querySelectorAll("[contenteditable='true']").length
       },
-      forms,
-      fields: collectFields(true),
+      template,
+      fields: flattenTemplate(template),
       html: document.documentElement.outerHTML
     };
   }
 
-  function collectFields(includeOptions = false) {
-    const seenRadioNames = new Set();
-    const nodes = Array.from(document.querySelectorAll("input, select, textarea, [contenteditable='true']"));
+  function buildPresetTemplate(includeOptions = false) {
+    const excludedNodes = new WeakSet();
+    const groups = [];
+
+    const repeatable = collectRepeatableGroups(includeOptions);
+    repeatable.groups.forEach((group) => groups.push(group));
+    repeatable.nodes.forEach((node) => excludedNodes.add(node));
+
+    const standalone = collectStandaloneGroups(includeOptions);
+    standalone.groups.forEach((group) => groups.push(group));
+    standalone.nodes.forEach((node) => excludedNodes.add(node));
+
+    const simpleFields = collectSimpleFields(excludedNodes, includeOptions);
+
+    return {
+      version: TEMPLATE_VERSION,
+      simpleFields,
+      groups
+    };
+  }
+
+  function collectSimpleFields(excludedNodes, includeOptions) {
+    const seenRadioGroups = new Set();
     const fields = [];
+    const nodes = Array.from(document.querySelectorAll(FIELD_SELECTOR));
 
     for (const node of nodes) {
-      if (!shouldCapture(node)) {
+      if (!shouldCapture(node) || excludedNodes.has(node)) {
         continue;
       }
 
-      const descriptor = buildFieldDescriptor(node, seenRadioNames, includeOptions);
-      if (descriptor) {
-        fields.push(descriptor);
+      const descriptor = buildFieldDescriptor(node, {
+        includeOptions,
+        seenRadioGroups,
+        forceNative: false
+      });
+
+      if (!descriptor) {
+        continue;
       }
+
+      if (descriptor.componentType === "custom-tags" || descriptor.componentType === "custom-cascader") {
+        continue;
+      }
+
+      fields.push(descriptor);
     }
 
     return fields;
   }
 
-  function shouldCapture(node) {
-    if (!(node instanceof HTMLElement)) {
-      return false;
-    }
+  function collectStandaloneGroups(includeOptions) {
+    const groups = [];
+    const nodes = [];
+    const seenWrappers = new Set();
 
-    if (node instanceof HTMLInputElement) {
-      const blocked = new Set(["hidden", "password", "file", "submit", "button", "reset", "image"]);
-      if (blocked.has(node.type)) {
-        return false;
+    for (const node of Array.from(document.querySelectorAll(FIELD_SELECTOR))) {
+      if (!shouldCapture(node) || isInsideRepeatableTable(node)) {
+        continue;
+      }
+
+      const component = getComponentInfo(node);
+      const groupKey = component.wrapperId || component.wrapperSelector;
+      if (!groupKey || seenWrappers.has(groupKey)) {
+        continue;
+      }
+
+      if (component.type === "custom-tags") {
+        const group = buildMultiValueGroup(node, includeOptions);
+        if (group) {
+          group.memberNodes.forEach((member) => nodes.push(member));
+          delete group.memberNodes;
+          groups.push(group);
+          seenWrappers.add(groupKey);
+        }
+        continue;
+      }
+
+      if (component.type === "custom-cascader") {
+        const group = buildCascaderGroup(node, includeOptions);
+        if (group) {
+          group.memberNodes.forEach((member) => nodes.push(member));
+          delete group.memberNodes;
+          groups.push(group);
+          seenWrappers.add(groupKey);
+        }
       }
     }
 
-    return !node.hasAttribute("disabled");
+    return { groups, nodes };
   }
 
-  function buildFieldDescriptor(node, seenRadioNames, includeOptions) {
+  function collectRepeatableGroups(includeOptions) {
+    const groups = [];
+    const nodes = [];
+
+    for (const table of Array.from(document.querySelectorAll("table"))) {
+      const group = buildRepeatableGroup(table, includeOptions);
+      if (!group) {
+        continue;
+      }
+
+      group.memberNodes.forEach((member) => nodes.push(member));
+      delete group.memberNodes;
+      groups.push(group);
+    }
+
+    return { groups, nodes };
+  }
+
+  function buildRepeatableGroup(table, includeOptions) {
+    const rows = getDataRows(table);
+    const capturedRows = [];
+    const memberNodes = [];
+    const headers = getTableHeaders(table);
+
+    for (const [rowIndex, row] of rows.entries()) {
+      const rowFields = captureRowFields(row, rowIndex, headers, includeOptions);
+      if (!rowFields.length) {
+        continue;
+      }
+
+      rowFields.forEach((field) => {
+        if (field._node) {
+          memberNodes.push(field._node);
+          delete field._node;
+        }
+      });
+
+      capturedRows.push({
+        rowIndex,
+        fields: rowFields
+      });
+    }
+
+    if (!capturedRows.length) {
+      return null;
+    }
+
+    return {
+      kind: "repeatable-table",
+      key: buildSelector(table),
+      label: getGroupLabel(table),
+      tableSelector: buildSelector(table),
+      addRowSelector: findAddRowSelector(table),
+      addRowText: findAddRowText(table),
+      headers,
+      rows: capturedRows,
+      memberNodes
+    };
+  }
+
+  function captureRowFields(row, rowIndex, headers, includeOptions) {
+    const seenRadioGroups = new Set();
+    const fields = [];
+    const cells = Array.from(row.querySelectorAll("td"));
+
+    cells.forEach((cell, columnIndex) => {
+      const localSeenWrappers = new Set();
+      const fieldNodes = Array.from(cell.querySelectorAll(FIELD_SELECTOR));
+
+      for (const node of fieldNodes) {
+        if (!shouldCapture(node)) {
+          continue;
+        }
+
+        const component = getComponentInfo(node);
+        const wrapperKey = component.wrapperId || component.wrapperSelector;
+        let descriptor = null;
+
+        if (component.type === "custom-tags" && wrapperKey) {
+          if (localSeenWrappers.has(wrapperKey)) {
+            continue;
+          }
+          localSeenWrappers.add(wrapperKey);
+          const group = buildMultiValueGroup(node, includeOptions);
+          if (group) {
+            descriptor = group.field;
+          }
+        } else if (component.type === "custom-cascader" && wrapperKey) {
+          if (localSeenWrappers.has(wrapperKey)) {
+            continue;
+          }
+          localSeenWrappers.add(wrapperKey);
+          const group = buildCascaderGroup(node, includeOptions);
+          if (group) {
+            descriptor = group.field;
+            if (group.detailField) {
+              fields.push({
+                ...group.detailField,
+                rowIndex,
+                columnIndex,
+                columnLabel: headers[columnIndex] || ""
+              });
+            }
+          }
+        } else {
+          descriptor = buildFieldDescriptor(node, {
+            includeOptions,
+            seenRadioGroups,
+            forceNative: false
+          });
+        }
+
+        if (!descriptor) {
+          continue;
+        }
+
+        fields.push({
+          ...descriptor,
+          rowIndex,
+          columnIndex,
+          columnLabel: headers[columnIndex] || "",
+          _node: node
+        });
+      }
+    });
+
+    return fields;
+  }
+
+  function buildMultiValueGroup(node, includeOptions) {
+    const field = buildFieldDescriptor(node, {
+      includeOptions,
+      seenRadioGroups: new Set(),
+      forceNative: false
+    });
+
+    if (!field) {
+      return null;
+    }
+
+    return {
+      kind: "multi-value-field",
+      key: field.wrapperId || field.wrapperSelector || field.selector,
+      label: getFieldTitle(field),
+      field,
+      values: Array.isArray(field.value) ? field.value : [],
+      memberNodes: [node]
+    };
+  }
+
+  function buildCascaderGroup(node, includeOptions) {
+    const field = buildFieldDescriptor(node, {
+      includeOptions,
+      seenRadioGroups: new Set(),
+      forceNative: false
+    });
+
+    if (!field) {
+      return null;
+    }
+
+    const detailNode = findLinkedDetailField(node);
+    let detailField = null;
+    const memberNodes = [node];
+
+    if (detailNode) {
+      detailField = buildFieldDescriptor(detailNode, {
+        includeOptions,
+        seenRadioGroups: new Set(),
+        forceNative: true
+      });
+      if (detailField) {
+        memberNodes.push(detailNode);
+      }
+    }
+
+    return {
+      kind: "cascader-field",
+      key: field.wrapperId || field.wrapperSelector || field.selector,
+      label: getFieldTitle(field),
+      field,
+      path: field.path || [],
+      detailField,
+      memberNodes
+    };
+  }
+
+  function buildFieldDescriptor(node, options) {
+    const includeOptions = Boolean(options?.includeOptions);
+    const forceNative = Boolean(options?.forceNative);
+    const seenRadioGroups = options?.seenRadioGroups || new Set();
     const selector = buildSelector(node);
+
     if (!selector) {
       return null;
     }
 
-    const component = getComponentInfo(node);
+    const component = forceNative ? getNativeComponentInfo(node) : getComponentInfo(node);
     const base = {
       selector,
       tag: node.tagName.toLowerCase(),
@@ -126,16 +370,17 @@
       componentType: component.type,
       wrapperSelector: component.wrapperSelector,
       wrapperId: component.wrapperId,
-      readonly: Boolean(node.readOnly),
+      readonly: isReadonlyNode(node),
       placeholder: node.getAttribute("placeholder") || ""
     };
 
     if (node instanceof HTMLInputElement && node.type === "radio") {
       const group = getRadioGroupInfo(node);
-      if (seenRadioNames.has(group.groupKey)) {
+      if (seenRadioGroups.has(group.groupKey)) {
         return null;
       }
-      seenRadioNames.add(group.groupKey);
+
+      seenRadioGroups.add(group.groupKey);
       const checked = group.nodes.find((item) => item.checked) || null;
       return {
         ...base,
@@ -153,6 +398,16 @@
         ...base,
         type: "tags",
         value: getTagValues(node)
+      };
+    }
+
+    if (component.type === "custom-cascader") {
+      const path = parsePathValue(node);
+      return {
+        ...base,
+        type: "text",
+        value: path.join("/"),
+        path
       };
     }
 
@@ -206,33 +461,233 @@
   }
 
   async function fillPage(preset) {
-    if (!preset?.fields?.length) {
-      return;
+    const template = normalizePreset(preset);
+    const failures = [];
+    const earlySimpleFields = template.simpleFields.filter(isStructuralField);
+    const lateSimpleFields = template.simpleFields.filter((field) => !isStructuralField(field));
+
+    for (const field of earlySimpleFields) {
+      const ok = await applyField(field, document);
+      if (!ok) {
+        failures.push(getFieldTitle(field));
+      }
     }
 
-    for (const field of preset.fields) {
-      await applyField(field);
+    for (const group of template.groups) {
+      const result = await fillGroup(group);
+      if (!result.ok) {
+        failures.push(result.label);
+      }
     }
+
+    for (const field of lateSimpleFields) {
+      const ok = await applyField(field, document);
+      if (!ok) {
+        failures.push(getFieldTitle(field));
+      }
+    }
+
+    for (const field of lateSimpleFields) {
+      const verified = await ensureFieldValue(field, document, 2);
+      if (!verified && !failures.includes(getFieldTitle(field))) {
+        failures.push(getFieldTitle(field));
+      }
+    }
+
+    return {
+      ok: true,
+      failures
+    };
   }
 
-  async function applyField(field) {
-    if (field.type === "radio") {
-      const radio = await findAndSelectRadio(field);
-      if (radio) {
-        dispatchFieldEvents(radio);
-      }
-      return;
+  function normalizePreset(preset) {
+    if (preset?.version === TEMPLATE_VERSION) {
+      return {
+        version: TEMPLATE_VERSION,
+        simpleFields: Array.isArray(preset.simpleFields) ? preset.simpleFields : [],
+        groups: Array.isArray(preset.groups) ? preset.groups : []
+      };
     }
 
-    const node = findField(field);
+    return {
+      version: TEMPLATE_VERSION,
+      simpleFields: Array.isArray(preset?.fields) ? preset.fields : [],
+      groups: []
+    };
+  }
+
+  async function fillGroup(group) {
+    if (group.kind === "multi-value-field") {
+      const ok = await fillMultiValueGroup(group);
+      return { ok, label: group.label || "multi-value field" };
+    }
+
+    if (group.kind === "cascader-field") {
+      const ok = await fillCascaderGroup(group);
+      return { ok, label: group.label || "cascader field" };
+    }
+
+    if (group.kind === "repeatable-table") {
+      const ok = await fillRepeatableGroup(group);
+      return { ok, label: group.label || "repeatable table" };
+    }
+
+    return { ok: true, label: group.label || "group" };
+  }
+
+  async function fillRepeatableGroup(group) {
+    const table = findRepeatableTable(group);
+    if (!table) {
+      return false;
+    }
+
+    let rows = getDataRows(table);
+    if (rows.length < group.rows.length) {
+      const addButton = findAddRowButton(group, table);
+      if (!addButton) {
+        return false;
+      }
+
+      while (rows.length < group.rows.length) {
+        const previousCount = rows.length;
+        triggerChoice(addButton);
+        const grown = await waitForRowCount(table, previousCount + 1, 2000);
+        if (!grown) {
+          return false;
+        }
+        rows = getDataRows(table);
+      }
+    }
+
+    for (const row of group.rows) {
+      const liveRow = rows[row.rowIndex];
+      if (!liveRow) {
+        return false;
+      }
+
+      const orderedFields = orderFieldsForFill(row.fields);
+      for (const field of orderedFields) {
+        const ok = await applyField(field, liveRow);
+        if (!ok) {
+          return false;
+        }
+      }
+    }
+
+    for (const row of group.rows) {
+      const liveRow = rows[row.rowIndex];
+      if (!liveRow) {
+        return false;
+      }
+
+      const verificationFields = orderFieldsForVerification(row.fields);
+      for (const field of verificationFields) {
+        const verified = await ensureFieldValue(field, liveRow, 2);
+        if (!verified) {
+          return false;
+        }
+      }
+    }
+
+    return true;
+  }
+
+  async function fillMultiValueGroup(group) {
+    const node = findField(group.field, document);
+    if (!node || !(node instanceof HTMLInputElement)) {
+      return false;
+    }
+
+    const wrapper = resolveChoiceWrapper(group.field, node);
+    if (!wrapper) {
+      return false;
+    }
+
+    clearTags(wrapper);
+    for (const value of group.values || []) {
+      let popupRoots = await openChoicePopup(wrapper, node);
+      let option = await findPopupOptionInContext(popupRoots, String(value), 800);
+      if (!option) {
+        setControlValue(node, value);
+        node.dispatchEvent(new Event("input", { bubbles: true }));
+        await wait(120);
+        popupRoots = getActivePopupRoots();
+        option = await findPopupOptionInContext(popupRoots, String(value), 1200);
+      }
+      if (!option) {
+        return false;
+      }
+      triggerChoice(option);
+      const selected = await waitForTagValue(wrapper, String(value), 1000);
+      if (!selected) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  async function fillCascaderGroup(group) {
+    const node = findField(group.field, document);
     if (!node) {
-      return;
+      return false;
+    }
+
+    const wrapper = resolveChoiceWrapper(group.field, node);
+    if (!wrapper) {
+      return false;
+    }
+
+    if (Array.isArray(group.path) && group.path.length) {
+      await openChoicePopup(wrapper, node);
+      const selected = await selectCascaderPath(group.path, node);
+      if (!selected) {
+        return false;
+      }
+
+      const confirmed = await waitForCascaderValue(node, group.path, 1500);
+      if (!confirmed) {
+        return false;
+      }
+
+      const display = parsePathValue(node).join("/");
+      if (!display.includes(group.path[group.path.length - 1])) {
+        return false;
+      }
+    }
+
+    if (group.detailField) {
+      const ok = await applyField(group.detailField, document);
+      if (!ok) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  async function applyField(field, scope) {
+    if (field.type === "radio") {
+      return findAndSelectRadio(field, scope);
+    }
+
+    const node = findField(field, scope);
+    if (!node) {
+      return false;
+    }
+
+    if (field.componentType === "custom-select") {
+      return fillCustomSelectField(field, node);
+    }
+
+    if (field.type === "tags") {
+      return fillTagsField(field, node);
     }
 
     if (field.type === "checkbox" && node instanceof HTMLInputElement) {
       node.checked = Boolean(field.value);
       dispatchFieldEvents(node);
-      return;
+      return true;
     }
 
     if (field.type === "select-multiple" && node instanceof HTMLSelectElement) {
@@ -241,114 +696,896 @@
         option.selected = wanted.has(option.value) || wanted.has(option.text);
       });
       dispatchFieldEvents(node);
-      return;
-    }
-
-    if (field.type === "tags") {
-      await fillTagsField(field, node);
-      return;
-    }
-
-    if (field.componentType === "custom-select" || field.componentType === "custom-cascader") {
-      await fillCustomChoiceField(field, node);
-      return;
+      return true;
     }
 
     if (field.componentType === "custom-date") {
       setControlValue(node, field.value);
       dispatchFieldEvents(node);
-      return;
+      return waitForControlValue(node, field.value, 800);
     }
 
     if (node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement || node instanceof HTMLSelectElement) {
       setControlValue(node, field.value);
       dispatchFieldEvents(node);
-      return;
+      return waitForControlValue(node, field.value, 800);
     }
 
     if (node instanceof HTMLElement && field.type === "contenteditable") {
       node.textContent = field.value == null ? "" : String(field.value);
       dispatchFieldEvents(node);
+      return true;
     }
+
+    return false;
   }
 
-  function findField(field) {
-    if (field.wrapperId) {
-      const wrappedById = safeQuery(`#${escapeCss(field.wrapperId)} input, #${escapeCss(field.wrapperId)} textarea, #${escapeCss(field.wrapperId)} select`);
-      if (wrappedById) {
-        return wrappedById;
-      }
+  async function fillCustomSelectField(field, node) {
+    const desired = field.value == null ? "" : String(field.value).trim();
+    if (!desired) {
+      return true;
     }
 
-    if (field.wrapperSelector) {
-      const wrappedBySelector = safeQuery(`${field.wrapperSelector} input, ${field.wrapperSelector} textarea, ${field.wrapperSelector} select`);
-      if (wrappedBySelector) {
-        return wrappedBySelector;
-      }
+    const wrapper = resolveChoiceWrapper(field, node);
+    if (!wrapper) {
+      return false;
     }
 
-    const selectorMatch = safeQuery(field.selector);
-    if (selectorMatch) {
-      return selectorMatch;
+    const popupRoots = await openChoicePopup(wrapper, node);
+    const option = await findPopupOptionInContext(popupRoots, desired, 1500);
+    if (!option) {
+      return false;
     }
+    triggerChoice(option);
+    const selected = await waitForSelection(node, desired, 1500);
+    if (!selected) {
+      return false;
+    }
+    await closeActivePopups();
+    await waitForDomSettled(400);
+
+    return matchesFieldValue(field, node);
+  }
+
+  async function fillTagsField(field, node) {
+    if (!Array.isArray(field.value)) {
+      return true;
+    }
+
+    const wrapper = resolveChoiceWrapper(field, node);
+    if (!wrapper || !(node instanceof HTMLInputElement)) {
+      return false;
+    }
+
+    clearTags(wrapper);
+    for (const value of field.value) {
+      let popupRoots = await openChoicePopup(wrapper, node);
+      let option = await findPopupOptionInContext(popupRoots, String(value), 800);
+      if (!option) {
+        setControlValue(node, value);
+        node.dispatchEvent(new Event("input", { bubbles: true }));
+        await wait(120);
+        popupRoots = getActivePopupRoots();
+        option = await findPopupOptionInContext(popupRoots, String(value), 1200);
+      }
+      if (!option) {
+        return false;
+      }
+
+      triggerChoice(option);
+      const selected = await waitForTagValue(wrapper, String(value), 1000);
+      if (!selected) {
+        return false;
+      }
+      await closeActivePopups();
+    }
+
+    return true;
+  }
+
+  function findField(field, scope) {
+    const root = scope instanceof Element || scope instanceof Document ? scope : document;
 
     if (field.name) {
-      const named = safeQuery(`[name="${escapeAttribute(field.name)}"]`);
+      const named = safeQueryWithin(root, `[name="${escapeAttribute(field.name)}"], #${escapeCss(field.name)}`);
       if (named) {
         return named;
       }
     }
 
-    if (field.label) {
-      const nodes = Array.from(document.querySelectorAll("input, select, textarea, [contenteditable='true']"));
-      return nodes.find((node) => getLabel(node) === field.label) || null;
+    if (field.wrapperId) {
+      const wrappedById = safeQueryWithin(root, `#${escapeCss(field.wrapperId)} input, #${escapeCss(field.wrapperId)} textarea, #${escapeCss(field.wrapperId)} select`);
+      if (wrappedById) {
+        return wrappedById;
+      }
+    }
+
+    if (field.columnIndex != null && root instanceof Element) {
+      const cells = Array.from(root.querySelectorAll("td"));
+      const targetCell = cells[field.columnIndex];
+      if (targetCell) {
+        const inCell = findFieldInContainer(field, targetCell);
+        if (inCell) {
+          return inCell;
+        }
+      }
+    }
+
+    const scoped = findFieldInContainer(field, root);
+    if (scoped) {
+      return scoped;
+    }
+
+    if (field.selector) {
+      const selectorMatch = safeQuery(field.selector);
+      if (selectorMatch) {
+        return selectorMatch;
+      }
     }
 
     return null;
   }
 
-  function findRadio(field) {
-    if (field.name && field.value != null) {
-      return safeQuery(`input[type="radio"][name="${escapeAttribute(field.name)}"][value="${escapeAttribute(field.value)}"]`);
+  function findFieldInContainer(field, container) {
+    if (!(container instanceof Element || container instanceof Document)) {
+      return null;
     }
 
-    return findField(field);
+    if (field.wrapperSelector) {
+      const wrapped = safeQueryWithin(container, `${field.wrapperSelector} input, ${field.wrapperSelector} textarea, ${field.wrapperSelector} select`);
+      if (wrapped) {
+        return wrapped;
+      }
+    }
+
+    if (field.label) {
+      const candidates = Array.from(container.querySelectorAll(FIELD_SELECTOR));
+      const exact = candidates.find((node) => getLabel(node) === field.label);
+      if (exact) {
+        return exact;
+      }
+    }
+
+    if (field.placeholder) {
+      const placeholderMatch = safeQueryWithin(container, `[placeholder="${escapeAttribute(field.placeholder)}"]`);
+      if (placeholderMatch) {
+        return placeholderMatch;
+      }
+    }
+
+    return safeQueryWithin(container, FIELD_SELECTOR);
   }
 
-  async function findAndSelectRadio(field) {
-    if (field.name && field.value != null) {
-      const namedGroup = Array.from(document.querySelectorAll(`input[type="radio"][name="${escapeAttribute(field.name)}"]`));
-      const direct = namedGroup.find((radio) => getRadioLabel(radio) === field.value || radio.value === field.value);
+  function findAndSelectRadio(field, scope) {
+    const root = scope instanceof Element || scope instanceof Document ? scope : document;
+    const radios = Array.from(root.querySelectorAll('input[type="radio"]'));
+    const target = radios.find((radio) => getRadioLabel(radio) === field.value || radio.value === field.value);
+    if (!target) {
+      return false;
+    }
+
+    target.click();
+    dispatchFieldEvents(target);
+    return true;
+  }
+
+  function shouldCapture(node) {
+    if (!(node instanceof HTMLElement)) {
+      return false;
+    }
+
+    if (node instanceof HTMLInputElement) {
+      const blocked = new Set(["hidden", "password", "file", "submit", "button", "reset", "image"]);
+      if (blocked.has(node.type)) {
+        return false;
+      }
+    }
+
+    return !node.hasAttribute("disabled");
+  }
+
+  function isInsideRepeatableTable(node) {
+    const table = node.closest("table");
+    if (!table) {
+      return false;
+    }
+
+    const rows = getDataRows(table);
+    return rows.some((row) => row.contains(node));
+  }
+
+  function getDataRows(table) {
+    const rows = Array.from(table.querySelectorAll("tbody tr"));
+    return rows.filter((row) => {
+      if (row.querySelector(".StyledResult-hdQdDC, .muya-result-content")) {
+        return false;
+      }
+      return row.querySelector(FIELD_SELECTOR);
+    });
+  }
+
+  function getTableHeaders(table) {
+    return Array.from(table.querySelectorAll("thead th")).map((th) => normalizeText(th.textContent || ""));
+  }
+
+  function getGroupLabel(element) {
+    const sectionTitle = element.closest("form, section, div")?.querySelector("label, .sc-cSxQHt, h2, h3");
+    if (sectionTitle) {
+      return normalizeText(sectionTitle.textContent || "");
+    }
+    return "";
+  }
+
+  function findAddRowSelector(table) {
+    const candidates = Array.from(table.parentElement?.parentElement?.querySelectorAll("button") || []);
+    const button = candidates.find((candidate) => /添加|新增|add/i.test(normalizeText(candidate.textContent || "")));
+    return button ? buildSelector(button) : "";
+  }
+
+  function findAddRowText(table) {
+    const candidates = Array.from(table.parentElement?.parentElement?.querySelectorAll("button") || []);
+    const button = candidates.find((candidate) => {
+      const text = normalizeText(candidate.textContent || "");
+      return /add/i.test(text) || text.includes("添加") || text.includes("娣诲姞");
+    });
+    return button ? normalizeText(button.textContent || "") : "";
+  }
+
+  function findLinkedDetailField(node) {
+    const row = node.closest(".StyledRow-ggetrT, .muya-row-wrapper");
+    if (!row) {
+      return null;
+    }
+
+    const inputs = Array.from(row.querySelectorAll("input:not([readonly])"));
+    return inputs.find((input) => /详细地址|门牌号|小区|楼栋/.test(input.getAttribute("placeholder") || "")) || null;
+  }
+
+  function parsePathValue(node) {
+    const value = getNodeDisplayValue(node);
+    if (!value) {
+      return [];
+    }
+    return value.split("/").map((part) => part.trim()).filter(Boolean);
+  }
+
+  function getNodeDisplayValue(node) {
+    if (node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement || node instanceof HTMLSelectElement) {
+      return normalizeText(node.value || "");
+    }
+    return normalizeText(node.textContent || "");
+  }
+
+  function getComponentInfo(node) {
+    const tagsWrapper = node.closest(".muya-tags-input-input-wrapper, .muya-tags-input-wrapper, .muya-tags-input-tags-wrapper");
+    const comboboxWrapper = node.closest('[role="combobox"]');
+    const inputWrapper = node.closest(".muya-input-input-wrapper");
+    const wrapper = tagsWrapper || comboboxWrapper || inputWrapper;
+    const className = [wrapper?.className || "", node.className || ""].join(" ");
+    let type = "native";
+
+    if (tagsWrapper || String(className).includes("muya-tags-input")) {
+      type = "custom-tags";
+    } else if (String(className).includes("muya-cascader")) {
+      type = "custom-cascader";
+    } else if (String(className).includes("muya-select")) {
+      type = "custom-select";
+    } else if (isReadonlyNode(node) && looksLikeDateField(node)) {
+      type = "custom-date";
+    }
+
+    return {
+      type,
+      wrapperId: wrapper?.id || "",
+      wrapperSelector: wrapper ? buildSelector(wrapper) : ""
+    };
+  }
+
+  function getNativeComponentInfo(node) {
+    return {
+      type: isReadonlyNode(node) && looksLikeDateField(node) ? "custom-date" : "native",
+      wrapperId: "",
+      wrapperSelector: ""
+    };
+  }
+
+  function isReadonlyNode(node) {
+    return node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement
+      ? node.readOnly
+      : false;
+  }
+
+  function looksLikeDateField(node) {
+    const text = `${node.getAttribute("placeholder") || ""} ${getLabel(node)}`.toLowerCase();
+    return text.includes("时间") || text.includes("日期") || /\d{4}-\d{2}-\d{2}/.test(getNodeDisplayValue(node));
+  }
+
+  function getTagValues(node) {
+    const wrapper = node.closest(".muya-tags-input-input-wrapper, .muya-tags-input-wrapper, .muya-tags-input-tags-wrapper");
+    if (!wrapper) {
+      return [];
+    }
+
+    return Array.from(wrapper.querySelectorAll(".muya-tag-children-wrapper, .StyledTagText-dIUACg"))
+      .map((tag) => normalizeText(tag.textContent || ""))
+      .filter(Boolean);
+  }
+
+  function clearTags(wrapper) {
+    const closeButtons = Array.from(wrapper.querySelectorAll(".muya-tag-close-icon, .StyledCloseIcon-hbRQlO"));
+    closeButtons.forEach((button) => {
+      if (button instanceof HTMLElement) {
+        triggerChoice(button);
+      }
+    });
+  }
+
+  async function waitForTagValue(wrapper, value, timeoutMs) {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+      const values = Array.from(wrapper.querySelectorAll(".muya-tag-children-wrapper, .StyledTagText-dIUACg"))
+        .map((tag) => normalizeText(tag.textContent || ""));
+      if (values.includes(value)) {
+        return true;
+      }
+      await wait(80);
+    }
+    return false;
+  }
+
+  function resolveChoiceWrapper(field, node) {
+    if (field.wrapperId) {
+      const byId = safeQuery(`#${escapeCss(field.wrapperId)}`);
+      if (byId) {
+        return byId;
+      }
+    }
+
+    if (field.wrapperSelector) {
+      const bySelector = safeQuery(field.wrapperSelector);
+      if (bySelector) {
+        return bySelector;
+      }
+    }
+
+    return node.closest(".muya-tags-input-input-wrapper, [role='combobox'], .muya-input-input-wrapper");
+  }
+
+  function openChoiceWrapper(wrapper, node) {
+    const target = wrapper.querySelector("button, input, [role='button']") || node || wrapper;
+    triggerChoice(target);
+    if (target instanceof HTMLElement) {
+      target.focus();
+    }
+  }
+
+  async function openChoicePopup(wrapper, node) {
+    await closeActivePopups();
+    const before = getActivePopupRoots();
+    openChoiceWrapper(wrapper, node);
+    const roots = await waitForPopupRoots(before, 1200);
+    return prioritizePopupRoots(roots, wrapper, node);
+  }
+
+  async function findPopupOption(text, timeoutMs) {
+    const wanted = normalizeText(text);
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < timeoutMs) {
+      const option = getVisiblePopupCandidates().find((node) => normalizeText(node.textContent || "") === wanted);
+      if (option) {
+        return option;
+      }
+      await wait(80);
+    }
+
+    return null;
+  }
+
+  async function findPopupOptionInContext(contextRoots, text, timeoutMs) {
+    const wanted = normalizeText(text);
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < timeoutMs) {
+      const roots = contextRoots?.length ? contextRoots : getActivePopupRoots();
+      const option = findBestOptionInRoots(roots, wanted);
+      if (option) {
+        return option;
+      }
+      await wait(80);
+    }
+
+    return null;
+  }
+
+  function findBestOptionInRoots(roots, wanted) {
+    const pool = [];
+    for (const root of roots) {
+      const candidates = Array.from(root.querySelectorAll("[role='option'], [role='treeitem'], li, button, div, span"));
+      for (const candidate of candidates) {
+        if (!(candidate instanceof HTMLElement)) {
+          continue;
+        }
+        if (!isVisible(candidate)) {
+          continue;
+        }
+        if (normalizeText(candidate.textContent || "") !== wanted) {
+          continue;
+        }
+        pool.push(candidate);
+      }
+    }
+
+    pool.sort((a, b) => getElementDepth(b) - getElementDepth(a));
+    return pool[0] || null;
+  }
+
+  function getVisiblePopupCandidates() {
+    const selectors = [
+      "[role='option']",
+      "[role='treeitem']",
+      "[role='menuitem']",
+      ".muya-menu-item",
+      ".muya-cascader-menu-item",
+      ".muya-select-option",
+      ".muya-popper *",
+      ".muya-dropdown *",
+      "li",
+      "button",
+      "div"
+    ];
+
+    return Array.from(document.querySelectorAll(selectors.join(", "))).filter((node) => {
+      if (!(node instanceof HTMLElement)) {
+        return false;
+      }
+      const text = normalizeText(node.textContent || "");
+      return Boolean(text) && isVisible(node);
+    });
+  }
+
+  function getActivePopupRoots() {
+    const selectors = [
+      ".muya-cascader-menu",
+      ".muya-select-menu",
+      ".muya-light-select-menu",
+      ".muya-menu",
+      ".muya-popover",
+      ".muya-popper",
+      ".StyledBaseMenu-gFFcFt",
+      ".StyledPopper-ibAbQz",
+      "[role='listbox']",
+      "[role='tree']",
+      "[role='menu']"
+    ];
+
+    const explicitRoots = Array.from(document.querySelectorAll(selectors.join(", "))).filter((node) => {
+      return node instanceof HTMLElement && isVisible(node);
+    });
+    if (explicitRoots.length) {
+      return explicitRoots;
+    }
+
+    return Array.from(document.querySelectorAll("body > div, body > ul")).filter((node) => {
+      if (!(node instanceof HTMLElement) || !isVisible(node)) {
+        return false;
+      }
+      return /muya|menu|cascader|dropdown|popover/i.test(String(node.className || ""));
+    });
+  }
+
+  async function waitForPopupRoots(previousRoots, timeoutMs) {
+    const previousSet = new Set(previousRoots);
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < timeoutMs) {
+      const current = getActivePopupRoots();
+      const fresh = current.filter((root) => !previousSet.has(root));
+      if (fresh.length) {
+        return fresh;
+      }
+      if (current.length) {
+        return current;
+      }
+      await wait(80);
+    }
+
+    return getActivePopupRoots();
+  }
+
+  function prioritizePopupRoots(roots, wrapper, node) {
+    const anchor = wrapper instanceof HTMLElement ? wrapper : node;
+    if (!(anchor instanceof HTMLElement) || !roots.length) {
+      return roots;
+    }
+
+    const anchorRect = anchor.getBoundingClientRect();
+    const scored = roots
+      .filter((root) => root instanceof HTMLElement)
+      .map((root) => ({
+        root,
+        score: getPopupDistance(anchorRect, root.getBoundingClientRect())
+      }))
+      .sort((a, b) => a.score - b.score);
+
+    return scored.map((item) => item.root);
+  }
+
+  async function waitForRowCount(table, minCount, timeoutMs) {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+      if (getDataRows(table).length >= minCount) {
+        return true;
+      }
+      await wait(100);
+    }
+    return false;
+  }
+
+  function triggerChoice(node) {
+    if (!(node instanceof HTMLElement)) {
+      return;
+    }
+
+    const eventInit = { bubbles: true, cancelable: true, composed: true, view: window };
+    node.dispatchEvent(new PointerEvent("pointerdown", { ...eventInit, pointerId: 1, pointerType: "mouse", isPrimary: true, button: 0 }));
+    node.dispatchEvent(new MouseEvent("mousedown", { ...eventInit, button: 0 }));
+    node.dispatchEvent(new PointerEvent("pointerup", { ...eventInit, pointerId: 1, pointerType: "mouse", isPrimary: true, button: 0 }));
+    node.dispatchEvent(new MouseEvent("mouseup", { ...eventInit, button: 0 }));
+    node.click();
+  }
+
+  function findRepeatableTable(group) {
+    if (group.tableSelector) {
+      const direct = safeQuery(group.tableSelector);
       if (direct) {
-        direct.click();
         return direct;
       }
     }
 
-    const base = findField(field);
-    const scope = (base && base.closest(".muya-formitem-input-wrapper, .muya-radio-group, form")) || document;
-    const radios = Array.from(scope.querySelectorAll('input[type="radio"]'));
-    const target = radios.find((radio) => getRadioLabel(radio) === field.value);
-    if (target) {
-      target.click();
-      return target;
+    const expectedHeaders = Array.isArray(group.headers) ? group.headers.filter(Boolean) : [];
+    const wantedLabel = normalizeText(group.label || "");
+
+    for (const table of Array.from(document.querySelectorAll("table"))) {
+      const headers = getTableHeaders(table).filter(Boolean);
+      if (expectedHeaders.length && headers.join("|") !== expectedHeaders.join("|")) {
+        continue;
+      }
+      if (!wantedLabel) {
+        return table;
+      }
+      const label = normalizeText(getGroupLabel(table) || "");
+      if (label.includes(wantedLabel)) {
+        return table;
+      }
     }
 
     return null;
   }
 
-  function safeQuery(selector) {
-    try {
-      return document.querySelector(selector);
-    } catch {
-      return null;
+  function findAddRowButton(group, table) {
+    if (group.addRowSelector) {
+      const direct = safeQuery(group.addRowSelector);
+      if (direct) {
+        return direct;
+      }
     }
+
+    const wantedText = normalizeText(group.addRowText || "");
+    for (const scope of getAncestorScopes(table, 7)) {
+      const buttons = Array.from(scope.querySelectorAll("button"));
+      if (wantedText) {
+        const exact = buttons.find((button) => normalizeText(button.textContent || "") === wantedText);
+        if (exact) {
+          return exact;
+        }
+      }
+
+      const fallback = buttons.find((button) => {
+        const text = normalizeText(button.textContent || "");
+        return /add/i.test(text) || text.includes("添加") || text.includes("娣诲姞");
+      });
+      if (fallback) {
+        return fallback;
+      }
+    }
+
+    return null;
+  }
+
+  function isVisible(node) {
+    const rect = node.getBoundingClientRect();
+    const style = window.getComputedStyle(node);
+    return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+  }
+
+  function getPopupDistance(anchorRect, popupRect) {
+    const dx = Math.abs(anchorRect.left - popupRect.left);
+    const dy = popupRect.top >= anchorRect.bottom
+      ? popupRect.top - anchorRect.bottom
+      : Math.abs(anchorRect.top - popupRect.top);
+    return dx + (dy * 2);
+  }
+
+  async function waitForSelection(node, desired, timeoutMs) {
+    const startedAt = Date.now();
+    const wanted = normalizeText(String(desired));
+    while (Date.now() - startedAt < timeoutMs) {
+      if (readChoiceValue(node) === wanted) {
+        return true;
+      }
+      await wait(80);
+    }
+    return false;
+  }
+
+  async function waitForDomSettled(idleMs) {
+    return new Promise((resolve) => {
+      let timer = window.setTimeout(done, idleMs);
+      const observer = new MutationObserver(() => {
+        window.clearTimeout(timer);
+        timer = window.setTimeout(done, idleMs);
+      });
+
+      observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+        attributes: true
+      });
+
+      function done() {
+        observer.disconnect();
+        resolve();
+      }
+    });
+  }
+
+  async function closeActivePopups() {
+    const activeRoots = getActivePopupRoots();
+    if (!activeRoots.length) {
+      return;
+    }
+
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    document.dispatchEvent(new KeyboardEvent("keyup", { key: "Escape", bubbles: true }));
+    document.body?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+    document.body?.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+    document.body?.click();
+    await wait(80);
+  }
+
+  function isStructuralField(field) {
+    const wrapperId = String(field.wrapperId || "");
+    const label = getFieldTitle(field);
+    return wrapperId.startsWith("customerTransitionType_")
+      || label.includes("客户交接类型")
+      || label === "新开"
+      || label.includes("开户/生效");
+  }
+
+  function getElementDepth(node) {
+    let depth = 0;
+    let current = node;
+    while (current.parentElement) {
+      depth += 1;
+      current = current.parentElement;
+    }
+    return depth;
+  }
+
+  function getAncestorScopes(node, maxDepth) {
+    const scopes = [];
+    let current = node.parentElement;
+    let depth = 0;
+    while (current && depth < maxDepth) {
+      scopes.push(current);
+      current = current.parentElement;
+      depth += 1;
+    }
+    return scopes;
+  }
+
+  async function selectCascaderPath(path, node) {
+    for (let index = 0; index < path.length; index += 1) {
+      const targetText = normalizeText(path[index]);
+      const menus = getVisibleCascaderMenus();
+      const menu = menus[Math.min(index, menus.length - 1)];
+      if (!menu) {
+        return false;
+      }
+
+      const item = findCascaderItem(menu, targetText);
+      if (!item) {
+        return false;
+      }
+
+      const isLast = index === path.length - 1;
+      if (!isLast) {
+        const expanded = await expandCascaderBranch(item, index + 2);
+        if (!expanded) {
+          return false;
+        }
+        continue;
+      }
+
+      triggerChoice(item);
+      const leafSelected = await waitForCascaderValue(node, path.slice(0, index + 1), 1200);
+      if (!leafSelected) {
+        await wait(180);
+      }
+    }
+
+    return true;
+  }
+
+  function getVisibleCascaderMenus(popupRoots = getActivePopupRoots()) {
+    const menus = [];
+    for (const root of popupRoots) {
+      const found = Array.from(root.querySelectorAll(".muya-cascader-menu"));
+      for (const menu of found) {
+        if (menu instanceof HTMLElement && isVisible(menu)) {
+          menus.push(menu);
+        }
+      }
+    }
+
+    return menus.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+  }
+
+  function findCascaderItem(menu, wanted) {
+    const items = Array.from(menu.querySelectorAll(".muya-cascader-menu-item, [role='menuitem']"));
+    return items.find((item) => {
+      if (!(item instanceof HTMLElement) || !isVisible(item)) {
+        return false;
+      }
+      const textNode = item.querySelector(".Paragraph-dEBTKe, .StyledCascaderMenuItemContent-kvmnew, span, div");
+      const text = normalizeText(textNode?.textContent || item.textContent || "");
+      return text === wanted;
+    }) || null;
+  }
+
+  async function waitForCascaderMenuCount(minCount, timeoutMs) {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+      if (getVisibleCascaderMenus().length >= minCount) {
+        return true;
+      }
+      await wait(80);
+    }
+    return false;
+  }
+
+  async function expandCascaderBranch(item, minMenuCount) {
+    revealCascaderBranch(item);
+    if (await waitForCascaderMenuCount(minMenuCount, 500)) {
+      return true;
+    }
+
+    const button = item.querySelector("button");
+    if (button instanceof HTMLElement) {
+      triggerChoice(button);
+      if (await waitForCascaderMenuCount(minMenuCount, 500)) {
+        return true;
+      }
+    }
+
+    triggerChoice(item);
+    return waitForCascaderMenuCount(minMenuCount, 700);
+  }
+
+  function revealCascaderBranch(item) {
+    if (!(item instanceof HTMLElement)) {
+      return;
+    }
+
+    const init = { bubbles: true, cancelable: true, composed: true, view: window };
+    item.dispatchEvent(new PointerEvent("pointerenter", { ...init, pointerId: 1, pointerType: "mouse", isPrimary: true }));
+    item.dispatchEvent(new MouseEvent("mouseenter", init));
+    item.dispatchEvent(new PointerEvent("pointermove", { ...init, pointerId: 1, pointerType: "mouse", isPrimary: true }));
+    item.dispatchEvent(new MouseEvent("mousemove", init));
+    item.dispatchEvent(new PointerEvent("pointerover", { ...init, pointerId: 1, pointerType: "mouse", isPrimary: true }));
+    item.dispatchEvent(new MouseEvent("mouseover", init));
+
+    const button = item.querySelector("button");
+    if (button instanceof HTMLElement) {
+      button.focus();
+    }
+  }
+
+  async function waitForCascaderValue(node, path, timeoutMs) {
+    const wantedSegments = Array.isArray(path) ? path.map((part) => normalizeText(String(part))) : [];
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+      const current = parsePathValue(node);
+      const matches = wantedSegments.every((segment, index) => current[index] === segment);
+      if (matches && current.length >= wantedSegments.length) {
+        return true;
+      }
+      await wait(80);
+    }
+    return false;
+  }
+
+  async function waitForControlValue(node, value, timeoutMs) {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+      if (matchesFieldValue({ type: node instanceof HTMLInputElement ? node.type : "text", value }, node)) {
+        return true;
+      }
+      await wait(60);
+    }
+    return false;
   }
 
   function dispatchFieldEvents(node) {
     node.dispatchEvent(new Event("input", { bubbles: true }));
     node.dispatchEvent(new Event("change", { bubbles: true }));
     node.dispatchEvent(new Event("blur", { bubbles: true }));
+  }
+
+  async function ensureFieldValue(field, scope, attempts) {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const node = findField(field, scope);
+      if (node && matchesFieldValue(field, node)) {
+        return true;
+      }
+
+      const ok = await applyField(field, scope);
+      if (!ok) {
+        continue;
+      }
+
+      const refreshed = findField(field, scope);
+      if (refreshed && matchesFieldValue(field, refreshed)) {
+        return true;
+      }
+
+      await waitForDomSettled(250);
+    }
+
+    const finalNode = findField(field, scope);
+    return Boolean(finalNode && matchesFieldValue(field, finalNode));
+  }
+
+  function matchesFieldValue(field, node) {
+    if (field.type === "radio" && node instanceof HTMLInputElement) {
+      return node.checked && (getRadioLabel(node) === field.value || node.value === field.value);
+    }
+
+    if (field.type === "checkbox" && node instanceof HTMLInputElement) {
+      return node.checked === Boolean(field.value);
+    }
+
+    if (field.type === "tags") {
+      const actualTags = getTagValues(node);
+      const expectedTags = Array.isArray(field.value) ? field.value.map((value) => normalizeText(String(value))) : [];
+      return expectedTags.every((value) => actualTags.includes(value));
+    }
+
+    if (field.componentType === "custom-select") {
+      return readChoiceValue(node) === normalizeText(String(field.value ?? ""));
+    }
+
+    if (field.componentType === "custom-cascader") {
+      const actualPath = parsePathValue(node);
+      const expectedPath = Array.isArray(field.path) ? field.path.map((part) => normalizeText(String(part))) : [];
+      return expectedPath.every((part, index) => actualPath[index] === part);
+    }
+
+    const expected = normalizeText(String(field.value ?? ""));
+    const actual = normalizeText(getNodeDisplayValue(node));
+    return actual === expected;
+  }
+
+  function readChoiceValue(node) {
+    const value = normalizeText(getNodeDisplayValue(node));
+    if (value) {
+      return value;
+    }
+    if (node instanceof HTMLInputElement) {
+      return normalizeText(node.getAttribute("title") || node.getAttribute("placeholder") || "");
+    }
+    return "";
   }
 
   function setControlValue(node, value) {
@@ -368,6 +1605,34 @@
 
   function getName(node) {
     return node.getAttribute("name") || node.getAttribute("id") || "";
+  }
+
+  function orderFieldsForFill(fields) {
+    return [...fields].sort((left, right) => getFieldOrderWeight(left) - getFieldOrderWeight(right));
+  }
+
+  function orderFieldsForVerification(fields) {
+    return [...fields].sort((left, right) => getFieldVerificationWeight(left) - getFieldVerificationWeight(right));
+  }
+
+  function getFieldOrderWeight(field) {
+    if (field.type === "tags") {
+      return 1;
+    }
+    if (field.componentType === "custom-select") {
+      return 3;
+    }
+    return 2;
+  }
+
+  function getFieldVerificationWeight(field) {
+    if (field.componentType === "custom-select") {
+      return 1;
+    }
+    if (field.type === "tags") {
+      return 2;
+    }
+    return 3;
   }
 
   function getLabel(node) {
@@ -392,11 +1657,15 @@
       return normalizeText(wrappedLabel.innerText);
     }
 
-    const row = node.closest("tr");
-    if (row) {
-      const cell = row.querySelector("th, td");
-      if (cell) {
-        return normalizeText(cell.innerText);
+    const cell = node.closest("td, th");
+    if (cell) {
+      const header = cell.parentElement?.parentElement?.parentElement?.querySelectorAll("thead th");
+      if (header?.length) {
+        const index = getCellIndex(cell);
+        const matchingHeader = header[index];
+        if (matchingHeader) {
+          return normalizeText(matchingHeader.textContent || "");
+        }
       }
     }
 
@@ -408,16 +1677,8 @@
     return "";
   }
 
-  function getRadioLabel(node) {
-    const label = node.closest("label");
-    if (label) {
-      return normalizeText(label.innerText);
-    }
-    return node.value || "";
-  }
-
   function getRadioGroupInfo(node) {
-    const scope = node.closest(".muya-formitem-input-wrapper, .muya-radio-group, form") || document;
+    const scope = node.closest(FIELD_CONTAINER_SELECTOR) || document;
     const nodes = Array.from(scope.querySelectorAll('input[type="radio"]'));
     return {
       groupKey: node.name || buildSelector(scope instanceof Element ? scope : node),
@@ -425,43 +1686,9 @@
     };
   }
 
-  function getComponentInfo(node) {
-    const wrapper = node.closest('[role="combobox"], .muya-tags-input-wrapper, .muya-input-input-wrapper');
-    const className = wrapper?.className || "";
-    let type = "native";
-
-    if (String(className).includes("muya-tags-input")) {
-      type = "custom-tags";
-    } else if (String(className).includes("muya-cascader")) {
-      type = "custom-cascader";
-    } else if (String(className).includes("muya-select")) {
-      type = "custom-select";
-    } else if (node.readOnly && looksLikeDateField(node)) {
-      type = "custom-date";
-    }
-
-    return {
-      type,
-      wrapperId: wrapper?.id || "",
-      wrapperSelector: wrapper ? buildSelector(wrapper) : ""
-    };
-  }
-
-  function looksLikeDateField(node) {
-    const text = `${node.getAttribute("placeholder") || ""} ${getLabel(node)}`.toLowerCase();
-    return text.includes("时间") || text.includes("日期") || /\d{4}-\d{2}-\d{2}/.test(node.value);
-  }
-
-  function getTagValues(node) {
-    const wrapper = node.closest(".muya-tags-input-wrapper, .muya-tags-input-tags-wrapper");
-    if (!wrapper) {
-      return [];
-    }
-
-    const tags = Array.from(wrapper.querySelectorAll(".muya-tag-children-wrapper, .StyledTagText-dIUACg"));
-    return tags
-      .map((tag) => normalizeText(tag.textContent || ""))
-      .filter(Boolean);
+  function getRadioLabel(node) {
+    const label = node.closest("label");
+    return label ? normalizeText(label.innerText) : node.value || "";
   }
 
   function getContext(node) {
@@ -481,11 +1708,6 @@
       parts.push(`row:${normalizeText(row.innerText).slice(0, 120)}`);
     }
 
-    const section = node.closest("section, fieldset, .form-group, .form-item, .ant-form-item, .el-form-item");
-    if (section) {
-      parts.push(`section:${normalizeText(section.innerText).slice(0, 120)}`);
-    }
-
     return parts.join(" | ");
   }
 
@@ -497,130 +1719,45 @@
     }));
   }
 
-  async function fillCustomChoiceField(field, node) {
-    const wrapper = resolveChoiceWrapper(field, node);
-    const values = Array.isArray(field.value) ? field.value : [field.value];
-
-    if (field.componentType === "custom-cascader" && typeof values[0] === "string" && values[0].includes("/")) {
-      const segments = values[0].split("/").map((part) => part.trim()).filter(Boolean);
-      for (const segment of segments) {
-        if (!wrapper) {
-          break;
-        }
-        wrapper.click();
-        await wait(120);
-        const option = await findPopupOption(segment, 1200);
-        if (option) {
-          option.click();
-          await wait(150);
-        }
-      }
-      return;
-    }
-
-    const first = values.find((value) => value != null && String(value).trim());
-    if (!first) {
-      return;
-    }
-
-    if (wrapper) {
-      wrapper.click();
-      await wait(120);
-      const option = await findPopupOption(String(first), 1200);
-      if (option) {
-        option.click();
-        await wait(120);
-        return;
-      }
-    }
-
-    setControlValue(node, first);
-    dispatchFieldEvents(node);
+  function getFieldTitle(field) {
+    return field.label || field.name || field.placeholder || field.selector || "field";
   }
 
-  async function fillTagsField(field, node) {
-    const wrapper = resolveChoiceWrapper(field, node) || node.closest(".muya-tags-input-wrapper");
-    const values = Array.isArray(field.value) ? field.value : [];
-    if (!wrapper || !(node instanceof HTMLInputElement)) {
-      return;
+  function flattenTemplate(template) {
+    const fields = [...(template.simpleFields || [])];
+
+    for (const group of template.groups || []) {
+      if (group.kind === "repeatable-table") {
+        group.rows.forEach((row) => row.fields.forEach((field) => fields.push(field)));
+        continue;
+      }
+
+      if (group.field) {
+        fields.push(group.field);
+      }
+
+      if (group.detailField) {
+        fields.push(group.detailField);
+      }
     }
 
-    wrapper.click();
-    await wait(80);
+    return fields;
+  }
 
-    for (const value of values) {
-      setControlValue(node, value);
-      node.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-      dispatchFieldEvents(node);
-      await wait(120);
-
-      const option = await findPopupOption(String(value), 700);
-      if (option) {
-        option.click();
-        await wait(120);
-      } else {
-        node.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-      }
+  function safeQuery(selector) {
+    try {
+      return document.querySelector(selector);
+    } catch {
+      return null;
     }
   }
 
-  function resolveChoiceWrapper(field, node) {
-    if (field.wrapperId) {
-      const byId = safeQuery(`#${escapeCss(field.wrapperId)}`);
-      if (byId) {
-        return byId;
-      }
+  function safeQueryWithin(root, selector) {
+    try {
+      return root.querySelector(selector);
+    } catch {
+      return null;
     }
-
-    if (field.wrapperSelector) {
-      const bySelector = safeQuery(field.wrapperSelector);
-      if (bySelector) {
-        return bySelector;
-      }
-    }
-
-    return node.closest('[role="combobox"], .muya-tags-input-wrapper, .muya-input-input-wrapper');
-  }
-
-  async function findPopupOption(text, timeoutMs) {
-    const startedAt = Date.now();
-    while (Date.now() - startedAt < timeoutMs) {
-      const option = getVisiblePopupCandidates().find((node) => normalizeText(node.textContent || "") === normalizeText(text));
-      if (option) {
-        return option;
-      }
-      await wait(80);
-    }
-    return null;
-  }
-
-  function getVisiblePopupCandidates() {
-    const selectors = [
-      '[role="option"]',
-      '[role="treeitem"]',
-      '[role="menuitem"]',
-      '.muya-menu-item',
-      '.muya-cascader-menu-item',
-      '.muya-select-option',
-      'li',
-      'button',
-      'div'
-    ];
-
-    const nodes = Array.from(document.querySelectorAll(selectors.join(", ")));
-    return nodes.filter((node) => {
-      if (!(node instanceof HTMLElement)) {
-        return false;
-      }
-      const text = normalizeText(node.textContent || "");
-      const rect = node.getBoundingClientRect();
-      const style = window.getComputedStyle(node);
-      return Boolean(text) && rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
-    });
-  }
-
-  function wait(ms) {
-    return new Promise((resolve) => window.setTimeout(resolve, ms));
   }
 
   function normalizeText(value) {
@@ -665,6 +1802,16 @@
     return index;
   }
 
+  function getCellIndex(cell) {
+    let index = 0;
+    let sibling = cell.previousElementSibling;
+    while (sibling) {
+      index += 1;
+      sibling = sibling.previousElementSibling;
+    }
+    return index;
+  }
+
   function escapeCss(value) {
     if (window.CSS?.escape) {
       return window.CSS.escape(value);
@@ -674,5 +1821,9 @@
 
   function escapeAttribute(value) {
     return String(value).replace(/"/g, '\\"');
+  }
+
+  function wait(ms) {
+    return new Promise((resolve) => window.setTimeout(resolve, ms));
   }
 })();

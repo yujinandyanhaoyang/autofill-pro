@@ -31,11 +31,17 @@ async function render() {
     title.value = preset.name;
 
     const meta = document.createElement("p");
-    meta.textContent = `${preset.fingerprint} | ${preset.fields.length} fields | updated ${new Date(preset.updatedAt).toLocaleString()}`;
+    const simpleFields = Array.isArray(preset.simpleFields) ? preset.simpleFields : (preset.fields || []);
+    const groups = Array.isArray(preset.groups) ? preset.groups : [];
+    meta.textContent = `${preset.fingerprint} | ${simpleFields.length} fields | ${groups.length} groups | updated ${new Date(preset.updatedAt).toLocaleString()}`;
 
     const raw = document.createElement("textarea");
     raw.rows = 8;
-    raw.value = JSON.stringify(preset.fields, null, 2);
+    raw.value = JSON.stringify({
+      version: preset.version || 1,
+      simpleFields,
+      groups
+    }, null, 2);
 
     const saveBtn = document.createElement("button");
     saveBtn.textContent = "Save";
@@ -43,7 +49,7 @@ async function render() {
       const next = {
         ...preset,
         name: title.value.trim() || preset.name,
-        fields: JSON.parse(raw.value),
+        ...JSON.parse(raw.value),
         updatedAt: new Date().toISOString()
       };
       await upsertPreset(next);
