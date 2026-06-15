@@ -1,11 +1,11 @@
-const STORAGE_KEY = "presets";
-const presetList = document.getElementById("presetList");
+const STORAGE_KEY = "profiles";
+const profileList = document.getElementById("presetList");
 
-document.getElementById("exportBtn").addEventListener("click", exportPresets);
-document.getElementById("importInput").addEventListener("change", importPresets);
+document.getElementById("exportBtn").addEventListener("click", exportProfiles);
+document.getElementById("importInput").addEventListener("change", importProfiles);
 
 init().catch((error) => {
-  presetList.textContent = error.message;
+  profileList.textContent = error.message;
 });
 
 async function init() {
@@ -14,39 +14,54 @@ async function init() {
 
 async function render() {
   const stored = await chrome.storage.local.get(STORAGE_KEY);
-  const presets = stored[STORAGE_KEY] || [];
-  presetList.innerHTML = "";
+  const profiles = stored[STORAGE_KEY] || [];
+  profileList.innerHTML = "";
 
-  if (!presets.length) {
-    presetList.textContent = "No presets saved yet.";
+  if (!profiles.length) {
+    profileList.textContent = "No profiles saved yet.";
     return;
   }
 
-  for (const preset of presets) {
+  for (const profile of profiles) {
     const card = document.createElement("article");
     card.className = "card";
 
     const title = document.createElement("input");
     title.type = "text";
-    title.value = preset.name;
+    title.value = profile.name || "";
+
+    const matchMode = document.createElement("select");
+    for (const optionValue of ["site", "page", "path-prefix", "custom"]) {
+      const option = document.createElement("option");
+      option.value = optionValue;
+      option.textContent = optionValue;
+      option.selected = profile.matchMode === optionValue;
+      matchMode.append(option);
+    }
+
+    const matchValue = document.createElement("input");
+    matchValue.type = "text";
+    matchValue.value = profile.matchValue || "";
 
     const meta = document.createElement("p");
-    meta.textContent = `${preset.fingerprint} | ${preset.fields.length} fields | updated ${new Date(preset.updatedAt).toLocaleString()}`;
+    meta.textContent = `${profile.fields.length} fields | ${profile.matchMode || "site"} | updated ${new Date(profile.updatedAt).toLocaleString()}`;
 
     const raw = document.createElement("textarea");
-    raw.rows = 8;
-    raw.value = JSON.stringify(preset.fields, null, 2);
+    raw.rows = 10;
+    raw.value = JSON.stringify(profile.fields, null, 2);
 
     const saveBtn = document.createElement("button");
     saveBtn.textContent = "Save";
     saveBtn.addEventListener("click", async () => {
       const next = {
-        ...preset,
-        name: title.value.trim() || preset.name,
+        ...profile,
+        name: title.value.trim() || profile.name,
+        matchMode: matchMode.value,
+        matchValue: matchValue.value.trim(),
         fields: JSON.parse(raw.value),
         updatedAt: new Date().toISOString()
       };
-      await upsertPreset(next);
+      await upsertProfile(next);
       await render();
     });
 
@@ -54,25 +69,25 @@ async function render() {
     deleteBtn.textContent = "Delete";
     deleteBtn.addEventListener("click", async () => {
       const storedInner = await chrome.storage.local.get(STORAGE_KEY);
-      const next = (storedInner[STORAGE_KEY] || []).filter((item) => item.id !== preset.id);
+      const next = (storedInner[STORAGE_KEY] || []).filter((item) => item.id !== profile.id);
       await chrome.storage.local.set({ [STORAGE_KEY]: next });
       await render();
     });
-
-    const actions = document.createElement("div");
-    actions.className = "actions";
-    actions.append(saveBtn, deleteBtn);
 
     const head = document.createElement("div");
     head.className = "card-head";
     head.append(title);
 
-    card.append(head, meta, raw, actions);
-    presetList.append(card);
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    actions.append(saveBtn, deleteBtn);
+
+    card.append(head, meta, matchMode, matchValue, raw, actions);
+    profileList.append(card);
   }
 }
 
-async function upsertPreset(next) {
+async function upsertProfile(next) {
   const stored = await chrome.storage.local.get(STORAGE_KEY);
   const current = stored[STORAGE_KEY] || [];
   const existing = current.some((item) => item.id === next.id);
@@ -82,18 +97,18 @@ async function upsertPreset(next) {
   await chrome.storage.local.set({ [STORAGE_KEY]: updated });
 }
 
-async function exportPresets() {
+async function exportProfiles() {
   const stored = await chrome.storage.local.get(STORAGE_KEY);
   const blob = new Blob([JSON.stringify(stored[STORAGE_KEY] || [], null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = "autofill-pro-presets.json";
+  link.download = "easy-fill-profiles.json";
   link.click();
   URL.revokeObjectURL(url);
 }
 
-async function importPresets(event) {
+async function importProfiles(event) {
   const [file] = event.target.files || [];
   if (!file) {
     return;

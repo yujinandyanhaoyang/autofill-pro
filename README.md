@@ -1,13 +1,14 @@
-# Autofill Pro
+# Easy Fill Profiles
 
-Autofill Pro is a local-first Chrome extension MVP for repetitive enterprise web forms. It captures the values you already entered on a page, stores them as a preset, and replays them later so you only edit the few fields that changed.
+Easy Fill Profiles is a local-first Chrome extension for repetitive web forms. It captures the values already present on a page, stores them as reusable profiles, and refills matching pages later.
 
 ## What it does
 
-- Captures text, number, date, textarea, select, multi-select, checkbox, radio, and contenteditable fields
-- Saves presets per page path in `chrome.storage.local`
-- Lets you edit saved values before refilling
-- Supports export and import of all presets
+- Captures text, number, date, textarea, select, multi-select, checkbox, radio, tags, and contenteditable fields
+- Stores multiple profiles in `chrome.storage.local`
+- Matches profiles by site, exact page, path prefix, or a custom URL rule
+- Lets you edit field values before refilling
+- Supports export and import of all saved profiles
 
 ## Load locally
 
@@ -18,35 +19,24 @@ Autofill Pro is a local-first Chrome extension MVP for repetitive enterprise web
 
 ## How to use
 
-1. Open your target business form page and fill it manually once
+1. Open a form page and fill it once
 2. Open the extension popup
-3. Enter a preset name and click `Capture current page`
-4. On the next visit, select that preset and click `Fill page`
-5. Edit the 3-4 differing fields in the popup, then click `Save edits`
-
-## Capture a real form page for analysis
-
-Screenshots are useful for layout, but not for selector strategy. To analyze a logged-in page:
-
-1. Load this extension in `chrome://extensions`
-2. Sign in to your business system and open the target form
-3. Wait until the page finishes rendering the dynamic sections you care about
-4. Open the extension popup
-5. Click `Export DOM snapshot`
-6. A local JSON file will download with:
-   - page metadata
-   - detected field inventory
-   - form and table counts
-   - raw page HTML
-
-Use that file to inspect stable labels, names, ids, nested table patterns, and custom component structures. If the page contains sensitive values, review or sanitize the JSON before sharing it.
+3. Enter a profile name
+4. Choose where the profile should apply:
+   - `This site`
+   - `This exact page`
+   - `This path prefix`
+   - `Custom rule`
+5. Click `Capture current values`
+6. Later, open a matching page, select the profile, and click `Fill page`
+7. If a few fields differ, edit them in the popup and click `Save edits`
 
 ## Current limits
 
-- Matching is strongest on the same page structure and URL path
-- Rich custom component libraries may require page-specific matching improvements
+- Matching is deterministic, not AI-based
+- Rich custom component libraries may still need page-specific handling
 - Password and file fields are intentionally excluded
 
 ## Why this design
 
-The fastest path is not generic AI autofill. It is deterministic capture and replay for the exact forms you repeatedly use. That solves the highest-value workflow first and keeps all data local.
+The shortest path to useful autofill is deterministic capture and replay with local profiles. That covers the high-frequency workflow without adding accounts, sync services, or remote data storage.

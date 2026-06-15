@@ -31,6 +31,8 @@
     return {
       title: document.title,
       url: location.href,
+      origin: location.origin,
+      path: location.pathname,
       fingerprint: getPageFingerprint()
     };
   }

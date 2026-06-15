@@ -3,29 +3,42 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Autofill Pro</title>
+    <title>Easy Fill Profiles</title>
     <link rel="stylesheet" href="popup.css">
   </head>
   <body>
     <main class="panel">
       <header class="hero">
-        <p class="eyebrow">Autofill Pro</p>
-        <h1>Save once, fill again</h1>
+        <p class="eyebrow">Easy Fill Profiles</p>
+        <h1>Capture once, reuse anywhere</h1>
         <p id="pageMeta" class="muted"></p>
       </header>
 
       <section class="card">
-        <label for="presetName">Preset name</label>
-        <input id="presetName" type="text" placeholder="Example: Daily procurement form">
-        <button id="captureBtn" class="primary">Capture current page</button>
+        <label for="profileName">Profile name</label>
+        <input id="profileName" type="text" placeholder="Example: Sales onboarding form">
+
+        <label for="matchMode">Applies to</label>
+        <select id="matchMode">
+          <option value="site">This site</option>
+          <option value="page">This exact page</option>
+          <option value="path-prefix">This path prefix</option>
+          <option value="custom">Custom rule</option>
+        </select>
+
+        <label for="matchValue">Match value</label>
+        <input id="matchValue" type="text" placeholder="https://example.com/forms">
+
+        <button id="captureBtn" class="primary">Capture current values</button>
       </section>
 
       <section class="card">
-        <label for="presetSelect">Saved presets for this page</label>
-        <select id="presetSelect"></select>
+        <label for="profileSelect">Matching profiles</label>
+        <select id="profileSelect"></select>
 
         <div class="actions">
           <button id="fillBtn" class="primary">Fill page</button>
+          <button id="duplicateBtn">Duplicate</button>
           <button id="saveBtn">Save edits</button>
           <button id="deleteBtn" class="danger">Delete</button>
         </div>
@@ -37,13 +50,6 @@
           <button id="manageBtn" class="ghost">Manage all</button>
         </div>
         <div id="fieldEditor" class="field-editor"></div>
-      </section>
-
-      <section class="card">
-        <div class="section-head">
-          <h2>Diagnostics</h2>
-        </div>
-        <button id="inspectBtn">Export DOM snapshot</button>
       </section>
 
       <p id="status" class="status"></p>

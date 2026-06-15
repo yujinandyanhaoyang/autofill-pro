@@ -1,22 +1,25 @@
-const STORAGE_KEY = "presets";
+const STORAGE_KEY = "profiles";
+const LEGACY_STORAGE_KEY = "presets";
 
 const elements = {
   pageMeta: document.getElementById("pageMeta"),
-  presetName: document.getElementById("presetName"),
-  presetSelect: document.getElementById("presetSelect"),
+  profileName: document.getElementById("profileName"),
+  matchMode: document.getElementById("matchMode"),
+  matchValue: document.getElementById("matchValue"),
+  profileSelect: document.getElementById("profileSelect"),
   fieldEditor: document.getElementById("fieldEditor"),
   status: document.getElementById("status"),
   captureBtn: document.getElementById("captureBtn"),
   fillBtn: document.getElementById("fillBtn"),
+  duplicateBtn: document.getElementById("duplicateBtn"),
   saveBtn: document.getElementById("saveBtn"),
   deleteBtn: document.getElementById("deleteBtn"),
-  manageBtn: document.getElementById("manageBtn"),
-  inspectBtn: document.getElementById("inspectBtn")
+  manageBtn: document.getElementById("manageBtn")
 };
 
 let currentTabId = null;
-let currentFingerprint = "";
-let presets = [];
+let pageMeta = null;
+let profiles = [];
 
 init().catch((error) => setStatus(error.message, true));
 
@@ -24,61 +27,95 @@ async function init() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   currentTabId = tab.id;
 
-  const meta = await sendToPage({ type: "pageMeta" });
-  currentFingerprint = meta.fingerprint;
-  elements.pageMeta.textContent = `${meta.title || "Untitled page"} | ${meta.fingerprint}`;
+  pageMeta = await sendToPage({ type: "pageMeta" });
+  elements.pageMeta.textContent = `${pageMeta.title || "Untitled page"} | ${pageMeta.origin}${pageMeta.path}`;
 
   wireEvents();
-  await loadPresets();
+  syncMatchInputs();
+  await migrateLegacyPresets();
+  await loadProfiles();
 }
 
 function wireEvents() {
-  elements.captureBtn.addEventListener("click", capturePreset);
-  elements.fillBtn.addEventListener("click", fillSelectedPreset);
-  elements.saveBtn.addEventListener("click", saveEditedPreset);
-  elements.deleteBtn.addEventListener("click", deleteSelectedPreset);
+  elements.captureBtn.addEventListener("click", captureProfile);
+  elements.fillBtn.addEventListener("click", fillSelectedProfile);
+  elements.duplicateBtn.addEventListener("click", duplicateSelectedProfile);
+  elements.saveBtn.addEventListener("click", saveEditedProfile);
+  elements.deleteBtn.addEventListener("click", deleteSelectedProfile);
   elements.manageBtn.addEventListener("click", () => chrome.runtime.openOptionsPage());
-  elements.inspectBtn.addEventListener("click", exportInspectionSnapshot);
-  elements.presetSelect.addEventListener("change", renderSelectedPreset);
+  elements.profileSelect.addEventListener("change", renderSelectedProfile);
+  elements.matchMode.addEventListener("change", syncMatchInputs);
 }
 
-async function loadPresets() {
-  const stored = await chrome.storage.local.get(STORAGE_KEY);
-  presets = (stored[STORAGE_KEY] || []).filter((preset) => preset.fingerprint === currentFingerprint);
-  renderPresetSelect();
-  renderSelectedPreset();
-}
-
-function renderPresetSelect() {
-  elements.presetSelect.innerHTML = "";
-
-  if (!presets.length) {
-    const option = document.createElement("option");
-    option.textContent = "No presets on this page yet";
-    option.value = "";
-    elements.presetSelect.append(option);
+async function migrateLegacyPresets() {
+  const stored = await chrome.storage.local.get([STORAGE_KEY, LEGACY_STORAGE_KEY]);
+  if ((stored[STORAGE_KEY] || []).length || !(stored[LEGACY_STORAGE_KEY] || []).length) {
     return;
   }
 
-  for (const preset of presets) {
+  const migrated = stored[LEGACY_STORAGE_KEY].map((preset) => ({
+    id: preset.id || crypto.randomUUID(),
+    name: preset.name || "Imported profile",
+    matchMode: "page",
+    matchValue: preset.fingerprint || preset.url || "",
+    url: preset.url || "",
+    title: preset.title || "",
+    createdAt: preset.createdAt || new Date().toISOString(),
+    updatedAt: preset.updatedAt || new Date().toISOString(),
+    fields: Array.isArray(preset.fields) ? preset.fields : []
+  }));
+
+  await chrome.storage.local.set({ [STORAGE_KEY]: migrated });
+}
+
+async function loadProfiles() {
+  const stored = await chrome.storage.local.get(STORAGE_KEY);
+  const allProfiles = stored[STORAGE_KEY] || [];
+  profiles = allProfiles.filter((profile) => matchesCurrentPage(profile));
+  profiles.sort((left, right) => {
+    const leftTime = Date.parse(left.updatedAt || left.createdAt || 0);
+    const rightTime = Date.parse(right.updatedAt || right.createdAt || 0);
+    return rightTime - leftTime;
+  });
+  renderProfileSelect();
+  renderSelectedProfile();
+}
+
+function renderProfileSelect() {
+  elements.profileSelect.innerHTML = "";
+
+  if (!profiles.length) {
     const option = document.createElement("option");
-    option.value = preset.id;
-    option.textContent = `${preset.name} (${preset.fields.length})`;
-    elements.presetSelect.append(option);
+    option.textContent = "No matching profiles yet";
+    option.value = "";
+    elements.profileSelect.append(option);
+    return;
+  }
+
+  for (const profile of profiles) {
+    const option = document.createElement("option");
+    option.value = profile.id;
+    option.textContent = `${profile.name} (${profile.fields.length})`;
+    elements.profileSelect.append(option);
   }
 }
 
-function renderSelectedPreset() {
-  const preset = getSelectedPreset();
+function renderSelectedProfile() {
+  const profile = getSelectedProfile();
   elements.fieldEditor.innerHTML = "";
 
-  if (!preset) {
+  if (!profile) {
+    elements.profileName.value = "";
+    elements.matchMode.value = "site";
+    syncMatchInputs();
     return;
   }
 
-  elements.presetName.value = preset.name;
+  elements.profileName.value = profile.name || "";
+  elements.matchMode.value = profile.matchMode || "site";
+  syncMatchInputs(profile.matchValue || "");
 
-  for (const [index, field] of preset.fields.entries()) {
+  for (const [index, field] of profile.fields.entries()) {
     const wrapper = document.createElement("label");
     wrapper.className = field.type === "checkbox" ? "field checkbox" : "field";
 
@@ -119,18 +156,51 @@ function buildEditorInput(field, index) {
   return input;
 }
 
-async function capturePreset() {
+function syncMatchInputs(explicitValue) {
+  const mode = elements.matchMode.value;
+  let value = explicitValue;
+
+  if (value == null) {
+    value = defaultMatchValue(mode);
+  }
+
+  elements.matchValue.readOnly = mode !== "custom";
+  elements.matchValue.value = value;
+}
+
+function defaultMatchValue(mode) {
+  if (!pageMeta) {
+    return "";
+  }
+
+  if (mode === "page") {
+    return `${pageMeta.origin}${pageMeta.path}`;
+  }
+
+  if (mode === "path-prefix") {
+    return `${pageMeta.origin}${getPathPrefix(pageMeta.path)}`;
+  }
+
+  if (mode === "custom") {
+    return `${pageMeta.origin}${pageMeta.path}`;
+  }
+
+  return pageMeta.origin;
+}
+
+async function captureProfile() {
   const data = await sendToPage({ type: "capturePage" });
   if (!data.fields.length) {
     setStatus("No supported fields found on this page.", true);
     return;
   }
 
-  const name = elements.presetName.value.trim() || `${data.title || "Preset"} ${new Date().toLocaleString()}`;
-  const record = {
+  const name = elements.profileName.value.trim() || `${data.title || "Profile"} ${new Date().toLocaleString()}`;
+  const profile = {
     id: crypto.randomUUID(),
     name,
-    fingerprint: data.fingerprint,
+    matchMode: elements.matchMode.value,
+    matchValue: getNormalizedMatchValue(),
     url: data.url,
     title: data.title,
     createdAt: new Date().toISOString(),
@@ -139,36 +209,69 @@ async function capturePreset() {
   };
 
   const stored = await chrome.storage.local.get(STORAGE_KEY);
-  const allPresets = stored[STORAGE_KEY] || [];
-  allPresets.push(record);
-  await chrome.storage.local.set({ [STORAGE_KEY]: allPresets });
+  const allProfiles = stored[STORAGE_KEY] || [];
+  allProfiles.push(profile);
+  await chrome.storage.local.set({ [STORAGE_KEY]: allProfiles });
 
-  await loadPresets();
-  elements.presetSelect.value = record.id;
-  renderSelectedPreset();
-  setStatus(`Captured ${record.fields.length} fields into "${record.name}".`);
+  await loadProfiles();
+  elements.profileSelect.value = profile.id;
+  renderSelectedProfile();
+  setStatus(`Captured ${profile.fields.length} fields into "${profile.name}".`);
 }
 
-async function fillSelectedPreset() {
-  const preset = getSelectedPreset();
-  if (!preset) {
-    setStatus("Select a preset first.", true);
+async function fillSelectedProfile() {
+  const profile = getSelectedProfile();
+  if (!profile) {
+    setStatus("Select a profile first.", true);
     return;
   }
 
-  await sendToPage({ type: "fillPage", preset });
-  setStatus(`Filled page with "${preset.name}".`);
-}
-
-async function saveEditedPreset() {
-  const preset = getSelectedPreset();
-  if (!preset) {
-    setStatus("Select a preset first.", true);
+  const result = await sendToPage({ type: "fillPage", preset: { fields: profile.fields } });
+  if (result?.ok === false) {
+    setStatus(result.error || "Failed to fill the page.", true);
     return;
   }
 
-  const next = structuredClone(preset);
-  next.name = elements.presetName.value.trim() || next.name;
+  setStatus(`Filled page with "${profile.name}".`);
+}
+
+async function duplicateSelectedProfile() {
+  const profile = getSelectedProfile();
+  if (!profile) {
+    setStatus("Select a profile first.", true);
+    return;
+  }
+
+  const copy = {
+    ...structuredClone(profile),
+    id: crypto.randomUUID(),
+    name: `${profile.name} copy`,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+
+  const stored = await chrome.storage.local.get(STORAGE_KEY);
+  const allProfiles = stored[STORAGE_KEY] || [];
+  allProfiles.push(copy);
+  await chrome.storage.local.set({ [STORAGE_KEY]: allProfiles });
+
+  await loadProfiles();
+  elements.profileSelect.value = copy.id;
+  renderSelectedProfile();
+  setStatus(`Duplicated "${profile.name}".`);
+}
+
+async function saveEditedProfile() {
+  const profile = getSelectedProfile();
+  if (!profile) {
+    setStatus("Select a profile first.", true);
+    return;
+  }
+
+  const next = structuredClone(profile);
+  next.name = elements.profileName.value.trim() || next.name;
+  next.matchMode = elements.matchMode.value;
+  next.matchValue = getNormalizedMatchValue();
   next.updatedAt = new Date().toISOString();
 
   for (const editor of elements.fieldEditor.querySelectorAll("[data-index]")) {
@@ -186,50 +289,73 @@ async function saveEditedPreset() {
     }
   }
 
-  await replacePreset(next);
-  await loadPresets();
-  elements.presetSelect.value = next.id;
-  renderSelectedPreset();
-  setStatus(`Saved changes to "${next.name}".`);
+  await replaceProfile(next);
+  await loadProfiles();
+  elements.profileSelect.value = next.id;
+  renderSelectedProfile();
+  setStatus(`Saved "${next.name}".`);
 }
 
-async function deleteSelectedPreset() {
-  const preset = getSelectedPreset();
-  if (!preset) {
-    setStatus("Select a preset first.", true);
+async function deleteSelectedProfile() {
+  const profile = getSelectedProfile();
+  if (!profile) {
+    setStatus("Select a profile first.", true);
     return;
   }
 
   const stored = await chrome.storage.local.get(STORAGE_KEY);
-  const allPresets = (stored[STORAGE_KEY] || []).filter((item) => item.id !== preset.id);
-  await chrome.storage.local.set({ [STORAGE_KEY]: allPresets });
-  await loadPresets();
-  setStatus(`Deleted "${preset.name}".`);
+  const allProfiles = (stored[STORAGE_KEY] || []).filter((item) => item.id !== profile.id);
+  await chrome.storage.local.set({ [STORAGE_KEY]: allProfiles });
+  await loadProfiles();
+  setStatus(`Deleted "${profile.name}".`);
 }
 
-async function exportInspectionSnapshot() {
-  const inspection = await sendToPage({ type: "inspectPage" });
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const slug = slugify(inspection.title || "page");
-  const filename = `autofill-pro-${slug}-${stamp}.json`;
-  const blob = new Blob([JSON.stringify(inspection, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  link.click();
-  URL.revokeObjectURL(url);
-  setStatus(`Exported DOM snapshot to ${filename}.`);
-}
-
-async function replacePreset(next) {
+async function replaceProfile(next) {
   const stored = await chrome.storage.local.get(STORAGE_KEY);
-  const allPresets = (stored[STORAGE_KEY] || []).map((item) => (item.id === next.id ? next : item));
-  await chrome.storage.local.set({ [STORAGE_KEY]: allPresets });
+  const allProfiles = (stored[STORAGE_KEY] || []).map((item) => (item.id === next.id ? next : item));
+  await chrome.storage.local.set({ [STORAGE_KEY]: allProfiles });
 }
 
-function getSelectedPreset() {
-  return presets.find((preset) => preset.id === elements.presetSelect.value) || null;
+function getSelectedProfile() {
+  return profiles.find((profile) => profile.id === elements.profileSelect.value) || null;
+}
+
+function matchesCurrentPage(profile) {
+  const pageRule = `${pageMeta.origin}${pageMeta.path}`;
+  const rule = String(profile.matchValue || "");
+
+  if (profile.matchMode === "page") {
+    return rule === pageRule;
+  }
+
+  if (profile.matchMode === "path-prefix") {
+    return pageRule.startsWith(rule);
+  }
+
+  if (profile.matchMode === "custom") {
+    return pageRule.startsWith(rule) || pageMeta.url.startsWith(rule);
+  }
+
+  return rule === pageMeta.origin;
+}
+
+function getNormalizedMatchValue() {
+  const mode = elements.matchMode.value;
+  const manual = elements.matchValue.value.trim();
+  return manual || defaultMatchValue(mode);
+}
+
+function getPathPrefix(path) {
+  if (!path || path === "/") {
+    return "/";
+  }
+
+  const segments = path.split("/").filter(Boolean);
+  if (segments.length <= 1) {
+    return path;
+  }
+
+  return `/${segments.slice(0, segments.length - 1).join("/")}`;
 }
 
 function setStatus(message, isError = false) {
@@ -239,12 +365,4 @@ function setStatus(message, isError = false) {
 
 async function sendToPage(message) {
   return chrome.tabs.sendMessage(currentTabId, message);
-}
-
-function slugify(value) {
-  return String(value)
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48) || "page";
 }

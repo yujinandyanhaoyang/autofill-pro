@@ -73,6 +73,10 @@ button {
   font: inherit;
 }
 
+input[readonly] {
+  background: #f5ecde;
+}
+
 button {
   cursor: pointer;
   background: #fff8ef;
@@ -102,6 +106,13 @@ button.ghost {
   display: grid;
   gap: 8px;
   margin-top: 10px;
+}
+
+.field-editor:empty::before {
+  content: "Select a profile to edit captured fields.";
+  color: var(--muted);
+  display: block;
+  padding: 8px 2px;
 }
 
 .field-editor {
