@@ -3,13 +3,13 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Easy Fill Profiles</title>
+    <title>Autofill-pro</title>
     <link rel="stylesheet" href="popup.css">
   </head>
   <body>
     <main class="panel">
       <header class="hero">
-        <p class="eyebrow">Easy Fill Profiles</p>
+        <p class="eyebrow">Autofill-pro</p>
         <h1>Capture once, reuse anywhere</h1>
         <p id="pageMeta" class="muted"></p>
       </header>
@@ -28,6 +28,11 @@
 
         <label for="matchValue">Match value</label>
         <input id="matchValue" type="text" placeholder="https://example.com/forms">
+
+        <label class="toggle-row">
+          <input id="autoFillOnLoad" type="checkbox" checked>
+          <span>Auto-fill after page load</span>
+        </label>
 
         <button id="captureBtn" class="primary">Capture current values</button>
       </section>

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Easy Fill Profiles",
-  "version": "0.1.0",
-  "description": "Save local autofill profiles and replay them on matching pages.",
+  "name": "Autofill-pro",
+  "version": "0.2.0",
+  "description": "Save local autofill profiles and replay them on matching pages automatically.",
   "permissions": [
     "storage",
     "tabs"
@@ -11,7 +11,7 @@
     "<all_urls>"
   ],
   "action": {
-    "default_title": "Easy Fill Profiles",
+    "default_title": "Autofill-pro",
     "default_popup": "popup/popup.html"
   },
   "options_page": "options/options.html",

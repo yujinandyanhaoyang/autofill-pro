@@ -1,5 +1,8 @@
 (function () {
-  const STORAGE_KEY = "presets";
+  const PROFILE_STORAGE_KEY = "profiles";
+  const AUTO_FILL_RETRY_DELAYS = [500, 1400, 2800];
+  let autoFillStarted = false;
+  let autoFillCompleted = false;
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type === "capturePage") {
@@ -9,7 +12,7 @@
 
     if (message?.type === "fillPage") {
       fillPage(message.preset)
-        .then(() => sendResponse({ ok: true }))
+        .then((result) => sendResponse({ ok: true, ...result }))
         .catch((error) => sendResponse({ ok: false, error: error.message }));
       return true;
     }
@@ -26,6 +29,8 @@
 
     return false;
   });
+
+  scheduleAutoFill();
 
   function getPageMeta() {
     return {
@@ -46,6 +51,85 @@
       ...getPageMeta(),
       fields: collectFields()
     };
+  }
+
+  function scheduleAutoFill() {
+    if (window.top !== window.self) {
+      return;
+    }
+
+    const trigger = () => {
+      if (autoFillStarted || autoFillCompleted) {
+        return;
+      }
+      autoFillStarted = true;
+      void attemptAutoFill();
+    };
+
+    if (document.readyState === "complete") {
+      window.setTimeout(trigger, 200);
+      return;
+    }
+
+    window.addEventListener("load", () => window.setTimeout(trigger, 300), { once: true });
+    window.setTimeout(trigger, 2500);
+  }
+
+  async function attemptAutoFill() {
+    try {
+      const profile = await getAutoFillProfile();
+      if (!profile?.fields?.length) {
+        return;
+      }
+
+      for (const delay of AUTO_FILL_RETRY_DELAYS) {
+        if (delay > 0) {
+          await wait(delay);
+        }
+        const result = await fillPage({ fields: profile.fields });
+        if (result.filledCount > 0) {
+          autoFillCompleted = true;
+          return;
+        }
+      }
+    } finally {
+      autoFillStarted = false;
+    }
+  }
+
+  async function getAutoFillProfile() {
+    const stored = await chrome.storage.local.get(PROFILE_STORAGE_KEY);
+    const profiles = (stored[PROFILE_STORAGE_KEY] || [])
+      .filter((profile) => profile && profile.autoFillOnLoad !== false)
+      .filter(matchesCurrentPage)
+      .sort(compareProfilesByUpdatedAt);
+    return profiles[0] || null;
+  }
+
+  function matchesCurrentPage(profile) {
+    const pageMeta = getPageMeta();
+    const pageRule = `${pageMeta.origin}${pageMeta.path}`;
+    const rule = String(profile.matchValue || "");
+
+    if (profile.matchMode === "page") {
+      return rule === pageRule;
+    }
+
+    if (profile.matchMode === "path-prefix") {
+      return pageRule.startsWith(rule);
+    }
+
+    if (profile.matchMode === "custom") {
+      return pageRule.startsWith(rule) || pageMeta.url.startsWith(rule);
+    }
+
+    return rule === pageMeta.origin;
+  }
+
+  function compareProfilesByUpdatedAt(left, right) {
+    const leftTime = Date.parse(left.updatedAt || left.createdAt || 0);
+    const rightTime = Date.parse(right.updatedAt || right.createdAt || 0);
+    return rightTime - leftTime;
   }
 
   function inspectPage() {
@@ -209,12 +293,21 @@
 
   async function fillPage(preset) {
     if (!preset?.fields?.length) {
-      return;
+      return { filledCount: 0, fieldCount: 0 };
     }
 
+    let filledCount = 0;
     for (const field of preset.fields) {
-      await applyField(field);
+      const applied = await applyField(field);
+      if (applied) {
+        filledCount += 1;
+      }
     }
+
+    return {
+      filledCount,
+      fieldCount: preset.fields.length
+    };
   }
 
   async function applyField(field) {
@@ -222,19 +315,20 @@
       const radio = await findAndSelectRadio(field);
       if (radio) {
         dispatchFieldEvents(radio);
+        return true;
       }
-      return;
+      return false;
     }
 
     const node = findField(field);
     if (!node) {
-      return;
+      return false;
     }
 
     if (field.type === "checkbox" && node instanceof HTMLInputElement) {
       node.checked = Boolean(field.value);
       dispatchFieldEvents(node);
-      return;
+      return true;
     }
 
     if (field.type === "select-multiple" && node instanceof HTMLSelectElement) {
@@ -243,35 +337,36 @@
         option.selected = wanted.has(option.value) || wanted.has(option.text);
       });
       dispatchFieldEvents(node);
-      return;
+      return true;
     }
 
     if (field.type === "tags") {
-      await fillTagsField(field, node);
-      return;
+      return fillTagsField(field, node);
     }
 
     if (field.componentType === "custom-select" || field.componentType === "custom-cascader") {
-      await fillCustomChoiceField(field, node);
-      return;
+      return fillCustomChoiceField(field, node);
     }
 
     if (field.componentType === "custom-date") {
       setControlValue(node, field.value);
       dispatchFieldEvents(node);
-      return;
+      return true;
     }
 
     if (node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement || node instanceof HTMLSelectElement) {
       setControlValue(node, field.value);
       dispatchFieldEvents(node);
-      return;
+      return true;
     }
 
     if (node instanceof HTMLElement && field.type === "contenteditable") {
       node.textContent = field.value == null ? "" : String(field.value);
       dispatchFieldEvents(node);
+      return true;
     }
+
+    return false;
   }
 
   function findField(field) {
@@ -507,7 +602,7 @@
       const segments = values[0].split("/").map((part) => part.trim()).filter(Boolean);
       for (const segment of segments) {
         if (!wrapper) {
-          break;
+          return false;
         }
         wrapper.click();
         await wait(120);
@@ -515,14 +610,16 @@
         if (option) {
           option.click();
           await wait(150);
+          continue;
         }
+        return false;
       }
-      return;
+      return true;
     }
 
     const first = values.find((value) => value != null && String(value).trim());
     if (!first) {
-      return;
+      return true;
     }
 
     if (wrapper) {
@@ -532,19 +629,20 @@
       if (option) {
         option.click();
         await wait(120);
-        return;
+        return true;
       }
     }
 
     setControlValue(node, first);
     dispatchFieldEvents(node);
+    return true;
   }
 
   async function fillTagsField(field, node) {
     const wrapper = resolveChoiceWrapper(field, node) || node.closest(".muya-tags-input-wrapper");
     const values = Array.isArray(field.value) ? field.value : [];
     if (!wrapper || !(node instanceof HTMLInputElement)) {
-      return;
+      return false;
     }
 
     wrapper.click();
@@ -564,6 +662,8 @@
         node.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
       }
     }
+
+    return true;
   }
 
   function resolveChoiceWrapper(field, node) {

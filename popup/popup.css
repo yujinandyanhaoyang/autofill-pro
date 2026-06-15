@@ -62,6 +62,16 @@ label,
   margin-bottom: 8px;
 }
 
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.toggle-row input {
+  width: auto;
+}
+
 input,
 select,
 textarea,

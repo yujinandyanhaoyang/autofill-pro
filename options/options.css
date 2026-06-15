@@ -102,3 +102,14 @@ select {
   font: inherit;
   background: #fff;
 }
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.checkbox-row input {
+  width: auto;
+}

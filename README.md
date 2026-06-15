@@ -1,12 +1,13 @@
-# Easy Fill Profiles
+# Autofill-pro
 
-Easy Fill Profiles is a local-first Chrome extension for repetitive web forms. It captures the values already present on a page, stores them as reusable profiles, and refills matching pages later.
+Autofill-pro is a local-first Chrome extension for repetitive web forms. It captures the values already present on a page, stores them as reusable profiles, and refills matching pages later.
 
 ## What it does
 
 - Captures text, number, date, textarea, select, multi-select, checkbox, radio, tags, and contenteditable fields
 - Stores multiple profiles in `chrome.storage.local`
 - Matches profiles by site, exact page, path prefix, or a custom URL rule
+- Can auto-fill the most recently updated matching profile after the page finishes loading
 - Lets you edit field values before refilling
 - Supports export and import of all saved profiles
 

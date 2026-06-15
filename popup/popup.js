@@ -6,6 +6,7 @@ const elements = {
   profileName: document.getElementById("profileName"),
   matchMode: document.getElementById("matchMode"),
   matchValue: document.getElementById("matchValue"),
+  autoFillOnLoad: document.getElementById("autoFillOnLoad"),
   profileSelect: document.getElementById("profileSelect"),
   fieldEditor: document.getElementById("fieldEditor"),
   status: document.getElementById("status"),
@@ -58,6 +59,7 @@ async function migrateLegacyPresets() {
     name: preset.name || "Imported profile",
     matchMode: "page",
     matchValue: preset.fingerprint || preset.url || "",
+    autoFillOnLoad: true,
     url: preset.url || "",
     title: preset.title || "",
     createdAt: preset.createdAt || new Date().toISOString(),
@@ -107,12 +109,14 @@ function renderSelectedProfile() {
   if (!profile) {
     elements.profileName.value = "";
     elements.matchMode.value = "site";
+    elements.autoFillOnLoad.checked = true;
     syncMatchInputs();
     return;
   }
 
   elements.profileName.value = profile.name || "";
   elements.matchMode.value = profile.matchMode || "site";
+  elements.autoFillOnLoad.checked = profile.autoFillOnLoad !== false;
   syncMatchInputs(profile.matchValue || "");
 
   for (const [index, field] of profile.fields.entries()) {
@@ -201,6 +205,7 @@ async function captureProfile() {
     name,
     matchMode: elements.matchMode.value,
     matchValue: getNormalizedMatchValue(),
+    autoFillOnLoad: elements.autoFillOnLoad.checked,
     url: data.url,
     title: data.title,
     createdAt: new Date().toISOString(),
@@ -272,6 +277,7 @@ async function saveEditedProfile() {
   next.name = elements.profileName.value.trim() || next.name;
   next.matchMode = elements.matchMode.value;
   next.matchValue = getNormalizedMatchValue();
+  next.autoFillOnLoad = elements.autoFillOnLoad.checked;
   next.updatedAt = new Date().toISOString();
 
   for (const editor of elements.fieldEditor.querySelectorAll("[data-index]")) {

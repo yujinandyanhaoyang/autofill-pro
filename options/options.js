@@ -43,6 +43,15 @@ async function render() {
     matchValue.type = "text";
     matchValue.value = profile.matchValue || "";
 
+    const autoFillWrap = document.createElement("label");
+    autoFillWrap.className = "checkbox-row";
+    const autoFill = document.createElement("input");
+    autoFill.type = "checkbox";
+    autoFill.checked = profile.autoFillOnLoad !== false;
+    const autoFillText = document.createElement("span");
+    autoFillText.textContent = "Auto-fill after page load";
+    autoFillWrap.append(autoFill, autoFillText);
+
     const meta = document.createElement("p");
     meta.textContent = `${profile.fields.length} fields | ${profile.matchMode || "site"} | updated ${new Date(profile.updatedAt).toLocaleString()}`;
 
@@ -58,6 +67,7 @@ async function render() {
         name: title.value.trim() || profile.name,
         matchMode: matchMode.value,
         matchValue: matchValue.value.trim(),
+        autoFillOnLoad: autoFill.checked,
         fields: JSON.parse(raw.value),
         updatedAt: new Date().toISOString()
       };
@@ -82,7 +92,7 @@ async function render() {
     actions.className = "actions";
     actions.append(saveBtn, deleteBtn);
 
-    card.append(head, meta, matchMode, matchValue, raw, actions);
+    card.append(head, meta, matchMode, matchValue, autoFillWrap, raw, actions);
     profileList.append(card);
   }
 }
@@ -103,7 +113,7 @@ async function exportProfiles() {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = "easy-fill-profiles.json";
+  link.download = "autofill-pro-profiles.json";
   link.click();
   URL.revokeObjectURL(url);
 }
