@@ -1,11 +1,40 @@
 const STORAGE_KEY = "profiles";
-const profileList = document.getElementById("presetList");
+const MATCH_MODE_LABELS = {
+  site: "Site",
+  page: "Page",
+  "path-prefix": "Path prefix",
+  custom: "Custom"
+};
 
-document.getElementById("exportBtn").addEventListener("click", exportProfiles);
-document.getElementById("importInput").addEventListener("change", importProfiles);
+const elements = {
+  profileCount: document.getElementById("profileCount"),
+  profileList: document.getElementById("profileList"),
+  emptyState: document.getElementById("emptyState"),
+  editorForm: document.getElementById("editorForm"),
+  profileName: document.getElementById("profileName"),
+  matchMode: document.getElementById("matchMode"),
+  matchValue: document.getElementById("matchValue"),
+  autoFillOnLoad: document.getElementById("autoFillOnLoad"),
+  meta: document.getElementById("meta"),
+  fieldList: document.getElementById("fieldList"),
+  newProfileBtn: document.getElementById("newProfileBtn"),
+  saveBtn: document.getElementById("saveBtn"),
+  deleteBtn: document.getElementById("deleteBtn"),
+  exportBtn: document.getElementById("exportBtn"),
+  importInput: document.getElementById("importInput")
+};
+
+let profiles = [];
+let selectedProfileId = "";
+
+elements.newProfileBtn.addEventListener("click", createProfile);
+elements.exportBtn.addEventListener("click", exportProfiles);
+elements.importInput.addEventListener("change", importProfiles);
+elements.editorForm.addEventListener("submit", saveProfile);
+elements.deleteBtn.addEventListener("click", deleteProfile);
 
 init().catch((error) => {
-  profileList.textContent = error.message;
+  elements.profileList.textContent = error.message;
 });
 
 async function init() {
@@ -14,86 +43,88 @@ async function init() {
 
 async function render() {
   const stored = await chrome.storage.local.get(STORAGE_KEY);
-  const profiles = stored[STORAGE_KEY] || [];
-  profileList.innerHTML = "";
+  profiles = stored[STORAGE_KEY] || [];
+  profiles.sort((left, right) => {
+    const leftTime = Date.parse(left.updatedAt || left.createdAt || 0);
+    const rightTime = Date.parse(right.updatedAt || right.createdAt || 0);
+    return rightTime - leftTime;
+  });
+
+  if (!profiles.some((profile) => profile.id === selectedProfileId)) {
+    selectedProfileId = profiles[0]?.id || "";
+  }
+
+  renderProfileList();
+  renderEditor();
+}
+
+function renderProfileList() {
+  elements.profileList.innerHTML = "";
+  elements.profileCount.textContent = `${profiles.length} saved`;
+
+  for (const profile of profiles) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = `profile-item${profile.id === selectedProfileId ? " is-selected" : ""}`;
+    item.addEventListener("click", () => {
+      selectedProfileId = profile.id;
+      renderProfileList();
+      renderEditor();
+    });
+
+    const title = document.createElement("strong");
+    title.textContent = profile.name || "Untitled profile";
+    const meta = document.createElement("small");
+    meta.textContent = `${profile.fields.length} fields | ${MATCH_MODE_LABELS[profile.matchMode] || "Page"}`;
+    item.append(title, meta);
+    elements.profileList.append(item);
+  }
 
   if (!profiles.length) {
-    profileList.textContent = "No profiles saved yet.";
+    elements.profileList.textContent = "No profiles saved yet.";
+  }
+}
+
+function renderEditor() {
+  const profile = getSelectedProfile();
+  const hasProfile = Boolean(profile);
+  elements.emptyState.hidden = hasProfile;
+  elements.editorForm.hidden = !hasProfile;
+
+  if (!profile) {
     return;
   }
 
-  for (const profile of profiles) {
-    const card = document.createElement("article");
-    card.className = "card";
+  elements.profileName.value = profile.name || "";
+  elements.matchMode.value = profile.matchMode || "page";
+  elements.matchValue.value = profile.matchValue || "";
+  elements.autoFillOnLoad.checked = profile.autoFillOnLoad !== false;
+  elements.meta.textContent = buildMeta(profile);
+  renderFields(profile.fields || []);
+}
 
-    const title = document.createElement("input");
-    title.type = "text";
-    title.value = profile.name || "";
+function renderFields(fields) {
+  elements.fieldList.innerHTML = "";
 
-    const matchMode = document.createElement("select");
-    for (const optionValue of ["site", "page", "path-prefix", "custom"]) {
-      const option = document.createElement("option");
-      option.value = optionValue;
-      option.textContent = optionValue;
-      option.selected = profile.matchMode === optionValue;
-      matchMode.append(option);
-    }
+  if (!fields.length) {
+    elements.fieldList.textContent = "No field values saved yet. Use Save Field Values in the popup first.";
+    return;
+  }
 
-    const matchValue = document.createElement("input");
-    matchValue.type = "text";
-    matchValue.value = profile.matchValue || "";
+  for (const [index, field] of fields.entries()) {
+    const item = document.createElement("div");
+    item.className = "field-item";
 
-    const autoFillWrap = document.createElement("label");
-    autoFillWrap.className = "checkbox-row";
-    const autoFill = document.createElement("input");
-    autoFill.type = "checkbox";
-    autoFill.checked = profile.autoFillOnLoad !== false;
-    const autoFillText = document.createElement("span");
-    autoFillText.textContent = "Auto-fill after page load";
-    autoFillWrap.append(autoFill, autoFillText);
+    const header = document.createElement("header");
+    const title = document.createElement("strong");
+    title.textContent = field.label || field.name || `${field.tag || "field"} ${index + 1}`;
+    const type = document.createElement("small");
+    type.textContent = field.type || "text";
+    header.append(title, type);
 
-    const meta = document.createElement("p");
-    meta.textContent = `${profile.fields.length} fields | ${profile.matchMode || "site"} | updated ${new Date(profile.updatedAt).toLocaleString()}`;
-
-    const raw = document.createElement("textarea");
-    raw.rows = 10;
-    raw.value = JSON.stringify(profile.fields, null, 2);
-
-    const saveBtn = document.createElement("button");
-    saveBtn.textContent = "Save";
-    saveBtn.addEventListener("click", async () => {
-      const next = {
-        ...profile,
-        name: title.value.trim() || profile.name,
-        matchMode: matchMode.value,
-        matchValue: matchValue.value.trim(),
-        autoFillOnLoad: autoFill.checked,
-        fields: JSON.parse(raw.value),
-        updatedAt: new Date().toISOString()
-      };
-      await upsertProfile(next);
-      await render();
-    });
-
-    const deleteBtn = document.createElement("button");
-    deleteBtn.textContent = "Delete";
-    deleteBtn.addEventListener("click", async () => {
-      const storedInner = await chrome.storage.local.get(STORAGE_KEY);
-      const next = (storedInner[STORAGE_KEY] || []).filter((item) => item.id !== profile.id);
-      await chrome.storage.local.set({ [STORAGE_KEY]: next });
-      await render();
-    });
-
-    const head = document.createElement("div");
-    head.className = "card-head";
-    head.append(title);
-
-    const actions = document.createElement("div");
-    actions.className = "actions";
-    actions.append(saveBtn, deleteBtn);
-
-    card.append(head, meta, matchMode, matchValue, autoFillWrap, raw, actions);
-    profileList.append(card);
+    const control = buildFieldInput(field, index);
+    item.append(header, control);
+    elements.fieldList.append(item);
   }
 }
 
@@ -105,6 +136,113 @@ async function upsertProfile(next) {
     ? current.map((item) => (item.id === next.id ? next : item))
     : [...current, next];
   await chrome.storage.local.set({ [STORAGE_KEY]: updated });
+}
+
+function getSelectedProfile() {
+  return profiles.find((profile) => profile.id === selectedProfileId) || null;
+}
+
+function buildMeta(profile) {
+  const updatedAt = profile.updatedAt ? new Date(profile.updatedAt).toLocaleString() : "unknown";
+  return `${profile.fields.length} fields | ${MATCH_MODE_LABELS[profile.matchMode] || "Page"} | Updated ${updatedAt}`;
+}
+
+function buildFieldInput(field, index) {
+  if (field.type === "checkbox") {
+    const label = document.createElement("label");
+    label.className = "checkbox-row";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = Boolean(field.value);
+    input.dataset.index = String(index);
+    input.dataset.kind = "boolean";
+    const text = document.createElement("span");
+    text.textContent = "Checked";
+    label.append(input, text);
+    return label;
+  }
+
+  if (field.type === "select-multiple" || field.type === "tags") {
+    const textarea = document.createElement("textarea");
+    textarea.rows = 3;
+    textarea.value = Array.isArray(field.value) ? field.value.join(", ") : "";
+    textarea.dataset.index = String(index);
+    textarea.dataset.kind = "list";
+    return textarea;
+  }
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.value = field.value == null ? "" : String(field.value);
+  input.dataset.index = String(index);
+  input.dataset.kind = "text";
+  return input;
+}
+
+async function saveProfile(event) {
+  event.preventDefault();
+
+  const profile = getSelectedProfile();
+  if (!profile) {
+    return;
+  }
+
+  const next = structuredClone(profile);
+  next.name = elements.profileName.value.trim() || profile.name || "Untitled profile";
+  next.matchMode = elements.matchMode.value;
+  next.matchValue = elements.matchValue.value.trim();
+  next.autoFillOnLoad = elements.autoFillOnLoad.checked;
+  next.updatedAt = new Date().toISOString();
+
+  for (const editor of elements.fieldList.querySelectorAll("[data-index]")) {
+    const index = Number(editor.dataset.index);
+    const kind = editor.dataset.kind;
+    if (kind === "boolean") {
+      next.fields[index].value = editor.checked;
+    } else if (kind === "list") {
+      next.fields[index].value = editor.value
+        .split(",")
+        .map((part) => part.trim())
+        .filter(Boolean);
+    } else {
+      next.fields[index].value = editor.value;
+    }
+  }
+
+  await upsertProfile(next);
+  await render();
+}
+
+async function deleteProfile() {
+  const profile = getSelectedProfile();
+  if (!profile) {
+    return;
+  }
+
+  const stored = await chrome.storage.local.get(STORAGE_KEY);
+  const next = (stored[STORAGE_KEY] || []).filter((item) => item.id !== profile.id);
+  await chrome.storage.local.set({ [STORAGE_KEY]: next });
+  selectedProfileId = "";
+  await render();
+}
+
+async function createProfile() {
+  const profile = {
+    id: crypto.randomUUID(),
+    name: "New profile",
+    matchMode: "page",
+    matchValue: "",
+    autoFillOnLoad: true,
+    url: "",
+    title: "",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    fields: []
+  };
+
+  await upsertProfile(profile);
+  selectedProfileId = profile.id;
+  await render();
 }
 
 async function exportProfiles() {
@@ -131,6 +269,7 @@ async function importProfiles(event) {
   }
 
   await chrome.storage.local.set({ [STORAGE_KEY]: parsed });
+  selectedProfileId = "";
   await render();
   event.target.value = "";
 }

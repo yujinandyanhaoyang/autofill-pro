@@ -1,13 +1,13 @@
 :root {
   color-scheme: light;
-  --bg: #f4efe7;
-  --panel: #fffdf8;
-  --line: #d8cab5;
-  --ink: #24180d;
-  --muted: #6e5a45;
-  --accent: #b65b2d;
-  --accent-strong: #94431b;
-  --danger: #9f2d23;
+  --bg: #f5efe6;
+  --panel: #fffdfa;
+  --line: #ddcfbc;
+  --ink: #22170f;
+  --muted: #6a5948;
+  --accent: #c1602d;
+  --accent-strong: #9c431a;
+  --accent-soft: #f2dfcf;
 }
 
 * {
@@ -17,25 +17,36 @@
 body {
   margin: 0;
   background:
-    radial-gradient(circle at top right, rgba(182, 91, 45, 0.12), transparent 38%),
-    linear-gradient(180deg, #f8f4ed 0%, var(--bg) 100%);
+    radial-gradient(circle at top right, rgba(193, 96, 45, 0.16), transparent 35%),
+    linear-gradient(180deg, #fbf7f1 0%, var(--bg) 100%);
   color: var(--ink);
-  font: 13px/1.4 "Segoe UI", sans-serif;
+  font: 13px/1.45 "Segoe UI", sans-serif;
 }
 
 .panel {
-  width: 380px;
-  padding: 14px;
+  width: 360px;
+  padding: 14px 14px 12px;
 }
 
-.hero h1,
-.section-head h2 {
+.hero h1 {
   margin: 0;
-  font: 700 18px/1.2 Georgia, "Times New Roman", serif;
+  font: 700 20px/1.1 Georgia, "Times New Roman", serif;
+}
+
+.brand {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.brand-mark {
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
 }
 
 .eyebrow {
-  margin: 0 0 4px;
+  margin: 0 0 2px;
   color: var(--accent-strong);
   font-size: 11px;
   font-weight: 700;
@@ -51,45 +62,22 @@ body {
 .card {
   margin-top: 12px;
   padding: 12px;
-  background: rgba(255, 253, 248, 0.9);
+  background: rgba(255, 253, 250, 0.94);
   border: 1px solid var(--line);
-  border-radius: 14px;
+  border-radius: 16px;
 }
 
-label,
-.field {
-  display: block;
-  margin-bottom: 8px;
-}
-
-.toggle-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.toggle-row input {
-  width: auto;
-}
-
-input,
-select,
-textarea,
 button {
   width: 100%;
-  border-radius: 10px;
+  border-radius: 12px;
   border: 1px solid var(--line);
-  padding: 9px 10px;
+  padding: 11px 12px;
   font: inherit;
-}
-
-input[readonly] {
-  background: #f5ecde;
 }
 
 button {
   cursor: pointer;
-  background: #fff8ef;
+  background: #fff7ef;
   color: var(--ink);
 }
 
@@ -99,53 +87,69 @@ button.primary {
   color: #fff;
 }
 
-button.danger {
-  color: #fff;
-  background: var(--danger);
-  border-color: var(--danger);
+button.secondary {
+  background: var(--accent-soft);
+  border-color: transparent;
 }
 
 button.ghost {
   width: auto;
-  padding: 6px 10px;
+  padding: 9px 12px;
   background: transparent;
 }
 
-.actions,
-.section-head {
+.card-note {
+  margin: 8px 0 0;
+  color: var(--muted);
+}
+
+.summary-copy {
   display: grid;
   gap: 8px;
+}
+
+.section-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.profile-select {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  padding: 11px 12px;
+  font: inherit;
+  color: var(--ink);
+  background: #fff;
+}
+
+.profile-toolbar {
   margin-top: 10px;
 }
 
-.field-editor:empty::before {
-  content: "Select a profile to edit captured fields.";
-  color: var(--muted);
-  display: block;
-  padding: 8px 2px;
-}
-
-.field-editor {
-  display: grid;
-  gap: 10px;
-  max-height: 260px;
-  overflow: auto;
-}
-
-.field small {
-  display: block;
-  color: var(--muted);
-  margin-bottom: 4px;
-}
-
-.checkbox {
+.actions {
   display: flex;
-  align-items: center;
   gap: 8px;
+  margin-top: 12px;
 }
 
-.checkbox input {
-  width: auto;
+.actions button {
+  flex: 1 1 0;
 }
 
 .status {

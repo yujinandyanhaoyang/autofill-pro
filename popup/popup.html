@@ -9,52 +9,36 @@
   <body>
     <main class="panel">
       <header class="hero">
-        <p class="eyebrow">Autofill-pro</p>
-        <h1>Capture once, reuse anywhere</h1>
+        <div class="brand">
+          <img src="../assets/mark.svg" alt="" class="brand-mark">
+          <div>
+            <p class="eyebrow">Autofill-pro</p>
+            <h1>Easy save, easy reuse</h1>
+          </div>
+        </div>
         <p id="pageMeta" class="muted"></p>
       </header>
 
       <section class="card">
-        <label for="profileName">Profile name</label>
-        <input id="profileName" type="text" placeholder="Example: Sales onboarding form">
-
-        <label for="matchMode">Applies to</label>
-        <select id="matchMode">
-          <option value="site">This site</option>
-          <option value="page">This exact page</option>
-          <option value="path-prefix">This path prefix</option>
-          <option value="custom">Custom rule</option>
-        </select>
-
-        <label for="matchValue">Match value</label>
-        <input id="matchValue" type="text" placeholder="https://example.com/forms">
-
-        <label class="toggle-row">
-          <input id="autoFillOnLoad" type="checkbox" checked>
-          <span>Auto-fill after page load</span>
-        </label>
-
-        <button id="captureBtn" class="primary">Capture current values</button>
+        <button id="saveBtn" class="primary">Save Field Values</button>
+        <p class="card-note">Updates the currently selected matching profile with this page's field values.</p>
       </section>
 
       <section class="card">
-        <label for="profileSelect">Matching profiles</label>
-        <select id="profileSelect"></select>
+        <div class="summary-copy">
+          <span class="section-label">Matching profiles</span>
+          <label for="profileSelect" class="sr-only">Select profile</label>
+          <select id="profileSelect" class="profile-select"></select>
+          <small id="selectedProfileMeta" class="muted">Default is empty. Choose or create a profile.</small>
+        </div>
+        <div class="profile-toolbar">
+          <button id="newProfileBtn" class="secondary">New Profile</button>
+        </div>
 
         <div class="actions">
-          <button id="fillBtn" class="primary">Fill page</button>
-          <button id="duplicateBtn">Duplicate</button>
-          <button id="saveBtn">Save edits</button>
-          <button id="deleteBtn" class="danger">Delete</button>
-        </div>
-      </section>
-
-      <section class="card">
-        <div class="section-head">
-          <h2>Quick edits</h2>
+          <button id="fillBtn" class="secondary">Use on this page</button>
           <button id="manageBtn" class="ghost">Manage all</button>
         </div>
-        <div id="fieldEditor" class="field-editor"></div>
       </section>
 
       <p id="status" class="status"></p>

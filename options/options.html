@@ -9,12 +9,18 @@
   <body>
     <main class="layout">
       <header>
-        <p class="eyebrow">Autofill-pro</p>
-        <h1>Profile Manager</h1>
-        <p>All profiles stay in `chrome.storage.local`. Export regularly if this data matters.</p>
+        <div class="hero">
+          <img src="../assets/mark.svg" alt="" class="brand-mark">
+          <div>
+            <p class="eyebrow">Autofill-pro</p>
+            <h1>Profile Manager</h1>
+            <p>Review, edit, and remove saved profiles. Data stays in <code>chrome.storage.local</code>.</p>
+          </div>
+        </div>
       </header>
 
       <section class="toolbar">
+        <button id="newProfileBtn" class="primary">New Profile</button>
         <button id="exportBtn">Export JSON</button>
         <label class="import">
           <span>Import JSON</span>
@@ -22,8 +28,65 @@
         </label>
       </section>
 
-      <section>
-        <div id="presetList" class="preset-list"></div>
+      <section class="workspace">
+        <aside class="sidebar">
+          <div class="sidebar-head">
+            <h2>Saved profiles</h2>
+            <p id="profileCount" class="muted"></p>
+          </div>
+          <div id="profileList" class="profile-list"></div>
+        </aside>
+
+        <section class="editor-shell">
+          <div id="emptyState" class="empty-state">
+            Select a profile to edit its fields and matching rules.
+          </div>
+
+          <form id="editorForm" class="editor" hidden>
+            <div class="editor-head">
+              <div>
+                <label for="profileName">Profile name</label>
+                <input id="profileName" type="text">
+              </div>
+              <div class="editor-actions">
+                <button id="saveBtn" type="submit" class="primary">Save Profile</button>
+                <button id="deleteBtn" type="button" class="danger">Delete</button>
+              </div>
+            </div>
+
+            <div class="grid">
+              <label>
+                <span>Applies to</span>
+                <select id="matchMode">
+                  <option value="site">This site</option>
+                  <option value="page">This exact page</option>
+                  <option value="path-prefix">This path prefix</option>
+                  <option value="custom">Custom rule</option>
+                </select>
+              </label>
+
+              <label>
+                <span>Match value</span>
+                <input id="matchValue" type="text">
+              </label>
+            </div>
+
+            <label class="checkbox-row">
+              <input id="autoFillOnLoad" type="checkbox">
+              <span>Auto-fill after page load</span>
+            </label>
+
+            <p id="meta" class="meta"></p>
+
+            <section class="fields-panel">
+              <div class="section-head">
+                <h2>Saved field values</h2>
+                <p>Edit values directly and save the profile.</p>
+              </div>
+              <div id="fieldList" class="field-list"></div>
+            </section>
+          </form>
+        </section>
       </section>
     </main>
 
