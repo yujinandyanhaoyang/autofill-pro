@@ -1,5 +1,6 @@
 (function () {
   const PROFILE_STORAGE_KEY = "profiles";
+  const ACTIVE_PROFILE_KEY = "activeProfileId";
   const AUTO_FILL_RETRY_DELAYS = [500, 1400, 2800];
   let autoFillStarted = false;
   let autoFillCompleted = false;
@@ -98,12 +99,19 @@
   }
 
   async function getAutoFillProfile() {
-    const stored = await chrome.storage.local.get(PROFILE_STORAGE_KEY);
-    const profiles = (stored[PROFILE_STORAGE_KEY] || [])
-      .filter((profile) => profile && profile.autoFillOnLoad !== false)
-      .filter(matchesCurrentPage)
-      .sort(compareProfilesByUpdatedAt);
-    return profiles[0] || null;
+    const stored = await chrome.storage.local.get([PROFILE_STORAGE_KEY, ACTIVE_PROFILE_KEY]);
+    const activeProfileId = stored[ACTIVE_PROFILE_KEY];
+    if (!activeProfileId) {
+      return null;
+    }
+
+    const profile = (stored[PROFILE_STORAGE_KEY] || [])
+      .find((item) => item?.id === activeProfileId);
+    if (!profile || profile.autoFillOnLoad === false || !matchesCurrentPage(profile)) {
+      return null;
+    }
+
+    return profile;
   }
 
   function matchesCurrentPage(profile) {
@@ -124,12 +132,6 @@
     }
 
     return rule === pageMeta.origin;
-  }
-
-  function compareProfilesByUpdatedAt(left, right) {
-    const leftTime = Date.parse(left.updatedAt || left.createdAt || 0);
-    const rightTime = Date.parse(right.updatedAt || right.createdAt || 0);
-    return rightTime - leftTime;
   }
 
   function inspectPage() {

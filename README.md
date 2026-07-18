@@ -7,7 +7,7 @@ Autofill-pro is a local-first Chrome extension for repetitive web forms. It capt
 - Captures text, number, date, textarea, select, multi-select, checkbox, radio, tags, and contenteditable fields
 - Stores multiple profiles in `chrome.storage.local`
 - Matches profiles by site, exact page, path prefix, or a custom URL rule
-- Can auto-fill the most recently updated matching profile after the page finishes loading
+- Can auto-fill the selected profile after the page finishes loading when its URL rule matches the current page
 - Lets you edit field values before refilling
 - Supports export and import of all saved profiles
 
