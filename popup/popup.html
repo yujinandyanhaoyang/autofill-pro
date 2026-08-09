@@ -3,26 +3,32 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Autofill Pro</title>
+    <title>Autofill-pro FX</title>
     <link rel="stylesheet" href="popup.css">
   </head>
   <body>
     <main class="panel">
       <header class="hero">
-        <p class="eyebrow">Autofill Pro</p>
-        <h1>Save once, fill again</h1>
+        <p class="eyebrow">Autofill-pro FX</p>
+        <h1>Manual FX fill</h1>
         <p id="pageMeta" class="muted"></p>
       </header>
 
       <section class="card">
         <label for="presetName">Preset name</label>
         <input id="presetName" type="text" placeholder="Example: Daily procurement form">
+        <label for="adapterType">Profile type</label>
+        <select id="adapterType">
+          <option value="generic">Generic form</option>
+          <option value="fxiaoke">Fxiaoke manual fill</option>
+        </select>
         <button id="captureBtn" class="primary">Capture current page</button>
       </section>
 
       <section class="card">
-        <label for="presetSelect">Saved presets for this page</label>
+        <label for="presetSelect">Saved profiles</label>
         <select id="presetSelect"></select>
+        <p id="adapterSummary" class="muted compact"></p>
 
         <div class="actions">
           <button id="fillBtn" class="primary">Fill page</button>

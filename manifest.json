@@ -1,17 +1,32 @@
 {
   "manifest_version": 3,
-  "name": "Autofill Pro",
-  "version": "0.1.0",
-  "description": "Capture and replay complex web form values locally.",
+  "name": "Autofill-pro FX",
+  "version": "0.2.0",
+  "description": "Capture, inspect, and manually replay complex web form values for FX workflows.",
+  "icons": {
+    "16": "assets/fx-icon-16.png",
+    "32": "assets/fx-icon-32.png",
+    "48": "assets/fx-icon-48.png",
+    "128": "assets/fx-icon-128.png"
+  },
   "permissions": [
     "storage",
-    "tabs"
+    "tabs",
+    "scripting",
+    "debugger"
   ],
+  "background": {
+    "service_worker": "src/background.js"
+  },
   "host_permissions": [
     "<all_urls>"
   ],
   "action": {
-    "default_title": "Autofill Pro",
+    "default_title": "Autofill-pro FX",
+    "default_icon": {
+      "16": "assets/fx-icon-16.png",
+      "32": "assets/fx-icon-32.png"
+    },
     "default_popup": "popup/popup.html"
   },
   "options_page": "options/options.html",

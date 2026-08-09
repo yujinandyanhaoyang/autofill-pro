@@ -1,10 +1,10 @@
 :root {
-  --bg: #f7f2ea;
-  --panel: #fffdf9;
-  --line: #d9ccb9;
-  --ink: #24180d;
-  --muted: #6e5a45;
-  --accent: #b65b2d;
+  --bg: #eef5fb;
+  --panel: #fbfdff;
+  --line: #bfd3e6;
+  --ink: #122033;
+  --muted: #586b7f;
+  --accent: #1b76d1;
 }
 
 * {
@@ -14,7 +14,7 @@
 body {
   margin: 0;
   background:
-    radial-gradient(circle at top right, rgba(182, 91, 45, 0.1), transparent 35%),
+    radial-gradient(circle at top right, rgba(27, 118, 209, 0.1), transparent 35%),
     var(--bg);
   color: var(--ink);
   font: 14px/1.5 "Segoe UI", sans-serif;
@@ -92,7 +92,8 @@ button,
 }
 
 textarea,
-input[type="text"] {
+input[type="text"],
+select {
   width: 100%;
   margin-top: 10px;
   border: 1px solid var(--line);

@@ -30,10 +30,19 @@ async function render() {
     title.type = "text";
     title.value = preset.name;
 
+    const adapterType = document.createElement("select");
+    for (const optionValue of ["generic", "fxiaoke"]) {
+      const option = document.createElement("option");
+      option.value = optionValue;
+      option.textContent = optionValue === "fxiaoke" ? "Fxiaoke manual fill" : "Generic form";
+      option.selected = getAdapterType(preset) === optionValue;
+      adapterType.append(option);
+    }
+
     const meta = document.createElement("p");
     const simpleFields = Array.isArray(preset.simpleFields) ? preset.simpleFields : (preset.fields || []);
     const groups = Array.isArray(preset.groups) ? preset.groups : [];
-    meta.textContent = `${preset.fingerprint} | ${simpleFields.length} fields | ${groups.length} groups | updated ${new Date(preset.updatedAt).toLocaleString()}`;
+    meta.textContent = `${preset.fingerprint} | ${getAdapterLabel(preset)} | ${simpleFields.length} fields | ${groups.length} groups | updated ${new Date(preset.updatedAt).toLocaleString()}`;
 
     const raw = document.createElement("textarea");
     raw.rows = 8;
@@ -49,6 +58,8 @@ async function render() {
       const next = {
         ...preset,
         name: title.value.trim() || preset.name,
+        adapterType: adapterType.value,
+        autoFillOnLoad: adapterType.value === "fxiaoke" ? false : preset.autoFillOnLoad !== false,
         ...JSON.parse(raw.value),
         updatedAt: new Date().toISOString()
       };
@@ -73,7 +84,7 @@ async function render() {
     head.className = "card-head";
     head.append(title);
 
-    card.append(head, meta, raw, actions);
+    card.append(head, meta, adapterType, raw, actions);
     presetList.append(card);
   }
 }
@@ -111,7 +122,21 @@ async function importPresets(event) {
     throw new Error("Imported file must be a JSON array.");
   }
 
-  await chrome.storage.local.set({ [STORAGE_KEY]: parsed });
+  await chrome.storage.local.set({
+    [STORAGE_KEY]: parsed.map((preset) => ({
+      ...preset,
+      adapterType: getAdapterType(preset),
+      autoFillOnLoad: getAdapterType(preset) === "fxiaoke" ? false : preset.autoFillOnLoad !== false
+    }))
+  });
   await render();
   event.target.value = "";
+}
+
+function getAdapterType(preset) {
+  return preset?.adapterType === "fxiaoke" ? "fxiaoke" : "generic";
+}
+
+function getAdapterLabel(preset) {
+  return getAdapterType(preset) === "fxiaoke" ? "Fxiaoke" : "Generic";
 }

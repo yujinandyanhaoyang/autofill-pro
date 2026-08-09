@@ -1,12 +1,12 @@
 :root {
   color-scheme: light;
-  --bg: #f4efe7;
-  --panel: #fffdf8;
-  --line: #d8cab5;
-  --ink: #24180d;
-  --muted: #6e5a45;
-  --accent: #b65b2d;
-  --accent-strong: #94431b;
+  --bg: #eef5fb;
+  --panel: #fbfdff;
+  --line: #bfd3e6;
+  --ink: #122033;
+  --muted: #586b7f;
+  --accent: #1b76d1;
+  --accent-strong: #0f4f94;
   --danger: #9f2d23;
 }
 
@@ -17,8 +17,8 @@
 body {
   margin: 0;
   background:
-    radial-gradient(circle at top right, rgba(182, 91, 45, 0.12), transparent 38%),
-    linear-gradient(180deg, #f8f4ed 0%, var(--bg) 100%);
+    radial-gradient(circle at top right, rgba(27, 118, 209, 0.12), transparent 38%),
+    linear-gradient(180deg, #f7fbff 0%, var(--bg) 100%);
   color: var(--ink);
   font: 13px/1.4 "Segoe UI", sans-serif;
 }
@@ -119,6 +119,12 @@ button.ghost {
   display: block;
   color: var(--muted);
   margin-bottom: 4px;
+}
+
+.field > input[type="checkbox"] {
+  width: auto;
+  margin: 0 6px 6px 0;
+  vertical-align: middle;
 }
 
 .checkbox {

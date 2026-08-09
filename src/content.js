@@ -65,6 +65,7 @@
         textareas: document.querySelectorAll("textarea").length,
         contenteditables: document.querySelectorAll("[contenteditable='true']").length
       },
+      fxiaokeDiagnostics: collectFxiaokeDiagnostics(template),
       template,
       fields: flattenTemplate(template),
       html: document.documentElement.outerHTML
@@ -72,6 +73,10 @@
   }
 
   function buildPresetTemplate(includeOptions = false) {
+    if (hasFxiaokeEditor()) {
+      return buildFxiaokePresetTemplate(includeOptions);
+    }
+
     const excludedNodes = new WeakSet();
     const groups = [];
 
@@ -90,6 +95,91 @@
       simpleFields,
       groups
     };
+  }
+
+  function hasFxiaokeEditor() {
+    return Boolean(document.querySelector(".f-g-item .j-comp-wrap[data-apiname]"));
+  }
+
+  function buildFxiaokePresetTemplate(includeOptions) {
+    const simpleFields = Array.from(document.querySelectorAll(".f-g-item.j-item-wrap .j-comp-wrap[data-apiname]"))
+      .filter((wrapper) => isVisible(wrapper) && !wrapper.classList.contains("field-comp-disabled"))
+      .map((wrapper) => buildFxiaokeFieldDescriptor(wrapper, includeOptions))
+      .filter(Boolean);
+
+    return {
+      version: TEMPLATE_VERSION,
+      adapterType: "fxiaoke",
+      simpleFields,
+      groups: []
+    };
+  }
+
+  function buildFxiaokeFieldDescriptor(wrapper, includeOptions) {
+    const item = wrapper.closest(".f-g-item.j-item-wrap");
+    const apiName = wrapper.getAttribute("data-apiname") || "";
+    const fieldType = wrapper.getAttribute("data-type") || "text";
+    const label = normalizeText(item?.querySelector(".f-g-item-label")?.textContent || "");
+    const control = getFxiaokeControl(wrapper);
+
+    if (!apiName || !control) {
+      return null;
+    }
+
+    const componentType = getFxiaokeComponentType(fieldType, wrapper);
+    return {
+      selector: `[data-apiname="${escapeAttribute(apiName)}"]`,
+      fxiaokeApiName: apiName,
+      label,
+      context: normalizeText(item?.querySelector(".f-title-help")?.getAttribute("data-title") || ""),
+      componentType,
+      type: componentType === "fxiaoke-date" ? "date" : "text",
+      value: getFxiaokeCapturedValue(wrapper, control, fieldType),
+      enabled: hasFxiaokeCapturedValue(getFxiaokeCapturedValue(wrapper, control, fieldType))
+    };
+  }
+
+  function hasFxiaokeCapturedValue(value) {
+    return Array.isArray(value) ? value.length > 0 : normalizeText(String(value ?? "")) !== "";
+  }
+
+  function getFxiaokeCapturedValue(wrapper, control, fieldType) {
+    if (fieldType === "select_many" && wrapper.querySelector(".crm-field-selecttile")) {
+      return Array.from(wrapper.querySelectorAll("label.item.checked"))
+        .map((node) => normalizeText(node.textContent || ""))
+        .filter(Boolean);
+    }
+    return getFxiaokeDisplayValue(wrapper, control);
+  }
+
+  function getFxiaokeComponentType(fieldType, wrapper) {
+    if (fieldType === "date" || wrapper.querySelector(".el-date-editor")) {
+      return "fxiaoke-date";
+    }
+    if (wrapper.querySelector(".crm-field-selecttile")) {
+      return "fxiaoke-tiled";
+    }
+    if (wrapper.querySelector(".crm-action-field-lookup")) {
+      return "fxiaoke-lookup";
+    }
+    if (/select|lookup|reference|owner|department|employee|customer/i.test(fieldType)) {
+      return "fxiaoke-select";
+    }
+    return "fxiaoke-text";
+  }
+
+  function getFxiaokeControl(wrapper) {
+    return wrapper.querySelector(".j-f-ipt, textarea, [contenteditable='true'], .j-select-input, .el-input__inner, input");
+  }
+
+  function getFxiaokeDisplayValue(wrapper, control) {
+    const selectedTile = wrapper.querySelector("label.item.checked, label.item.radio.checked, label.item.checkbox.checked");
+    if (selectedTile) {
+      return normalizeText(selectedTile.textContent || "");
+    }
+    const fakeInput = wrapper.querySelector(".crm-action-fakeiptwrap");
+    const value = fakeInput?.textContent || getNodeDisplayValue(control) || control?.getAttribute("title") || "";
+    return normalizeText(value);
   }
 
   function collectSimpleFields(excludedNodes, includeOptions) {
@@ -461,6 +551,296 @@
   }
 
   async function fillPage(preset) {
+    if (getAdapterType(preset) === "fxiaoke" || hasFxiaokeFields(preset)) {
+      return fillFxiaokePage(preset);
+    }
+
+    return fillGenericPage(preset);
+  }
+
+  function hasFxiaokeFields(preset) {
+    const fields = Array.isArray(preset?.simpleFields) ? preset.simpleFields : preset?.fields;
+    return Array.isArray(fields) && fields.some((field) => field?.fxiaokeApiName);
+  }
+
+  async function fillFxiaokePage(preset) {
+    const template = normalizePreset(preset);
+    const outcomes = [];
+    const pending = template.simpleFields
+      .filter((field) => isFxiaokeFieldEnabled(field))
+      .sort((left, right) => getFxiaokeFillWeight(left) - getFxiaokeFillWeight(right));
+    const skipped = template.simpleFields
+      .filter((field) => !isFxiaokeFieldEnabled(field))
+      .map((field) => ({ field: getFieldTitle(field), apiName: field.fxiaokeApiName || "", status: "skipped", reason: "not-enabled" }));
+
+    for (let attempt = 0; pending.length && attempt < 3; attempt += 1) {
+      const retry = [];
+      for (const field of pending) {
+        const result = field.fxiaokeApiName
+          ? await fillFxiaokeField(field)
+          : { ok: await applyField(field, document), reason: "generic-field" };
+        if (result.ok) {
+          outcomes.push({ field: getFieldTitle(field), apiName: field.fxiaokeApiName || "", status: "filled" });
+          await waitForDomSettled(120);
+        } else if (attempt < 2 && (result.reason === "disabled" || result.reason === "not-found")) {
+          retry.push(field);
+        } else {
+          outcomes.push({ field: getFieldTitle(field), apiName: field.fxiaokeApiName || "", status: "failed", reason: result.reason || "not-applied" });
+        }
+      }
+      pending.splice(0, pending.length, ...retry);
+      if (retry.length) {
+        await waitForDomSettled(350);
+      }
+    }
+
+    const failures = outcomes.filter((item) => item.status === "failed").map((item) => item.field);
+
+    return {
+      ok: true,
+      adapter: "fxiaoke",
+      failures,
+      outcomes,
+      skipped,
+      diagnostics: collectFxiaokeDiagnostics(template)
+    };
+  }
+
+  function isFxiaokeFieldEnabled(field) {
+    if (field.enabled === false) {
+      return false;
+    }
+    return field.enabled === true || hasFxiaokeCapturedValue(field.value);
+  }
+
+  function getFxiaokeFillWeight(field) {
+    if (field.componentType === "fxiaoke-lookup") {
+      return 0;
+    }
+    if (field.componentType === "fxiaoke-text" || field.componentType === "fxiaoke-date") {
+      return 1;
+    }
+    if (field.componentType === "fxiaoke-select") {
+      return 2;
+    }
+    return 3;
+  }
+
+  async function fillFxiaokeField(field) {
+    const wrapper = findFxiaokeWrapper(field);
+    if (!wrapper) {
+      return { ok: false, reason: "not-found" };
+    }
+    if (wrapper.classList.contains("field-comp-disabled")) {
+      return { ok: false, reason: "disabled" };
+    }
+
+    const control = getFxiaokeControl(wrapper);
+    if (!control) {
+      return { ok: false, reason: "no-control" };
+    }
+
+    wrapper.scrollIntoView({ block: "center", inline: "nearest" });
+
+    if (field.componentType === "fxiaoke-select" || field.componentType === "fxiaoke-lookup" || field.componentType === "fxiaoke-tiled") {
+      return fillFxiaokeSelect(wrapper, control, field.value);
+    }
+
+    const nativeApplied = await nativeReplaceText(control, field.value);
+    if (nativeApplied) {
+      const nativeOk = await waitForFxiaokeValue(wrapper, field.value, 1200);
+      if (nativeOk) {
+        return { ok: true, reason: "" };
+      }
+    }
+    setControlValue(control, field.value);
+    dispatchFieldEvents(control);
+    const ok = await waitForFxiaokeValue(wrapper, field.value, 1000);
+    return { ok, reason: ok ? "" : "value-not-applied" };
+  }
+
+  function findFxiaokeWrapper(field) {
+    if (field.fxiaokeApiName) {
+      const selector = `.j-comp-wrap[data-apiname="${escapeAttribute(field.fxiaokeApiName)}"]`;
+      const matches = Array.from(document.querySelectorAll(selector));
+      const visible = matches.find((node) => isVisible(node) && !node.closest(".f-disable"));
+      if (visible) {
+        return visible;
+      }
+    }
+
+    if (field.label) {
+      const item = Array.from(document.querySelectorAll(".f-g-item.j-item-wrap"))
+        .find((node) => isVisible(node) && normalizeText(node.querySelector(".f-g-item-label")?.textContent || "") === field.label);
+      return item?.querySelector(".j-comp-wrap[data-apiname]") || null;
+    }
+
+    return null;
+  }
+
+  async function fillFxiaokeSelect(wrapper, control, value) {
+    const desiredValues = Array.isArray(value)
+      ? value.map((item) => normalizeText(String(item))).filter(Boolean)
+      : [normalizeText(String(value ?? ""))].filter(Boolean);
+    if (!desiredValues.length) {
+      return { ok: true, reason: "" };
+    }
+    const desired = desiredValues[0];
+
+    if (wrapper.querySelector(".crm-field-selecttile")) {
+      const tiles = Array.from(wrapper.querySelectorAll("label.item"));
+      for (const tile of tiles) {
+        const selected = tile.classList.contains("checked");
+        const wanted = desiredValues.includes(normalizeText(tile.textContent || ""));
+        if (selected !== wanted) {
+          await nativeClick(tile);
+          await wait(80);
+        }
+      }
+      const ok = await waitForFxiaokeTiles(wrapper, desiredValues, 1200);
+      return { ok, reason: ok ? "" : "selection-not-confirmed" };
+    }
+
+    if (wrapper.querySelector(".crm-action-field-lookup")) {
+      return fillFxiaokeLookup(wrapper, desired);
+    }
+
+    const panel = await openFxiaokeSelectPanel(wrapper, control);
+    if (!panel) {
+      return { ok: false, reason: "panel-not-opened" };
+    }
+    const option = await findFxiaokePanelOption(panel, desired, 1200);
+    if (!option) {
+      return { ok: false, reason: "option-not-found" };
+    }
+
+    await nativeClick(option);
+    const ok = await waitForFxiaokeValue(wrapper, desired, 1500);
+    return { ok, reason: ok ? "" : "selection-not-confirmed" };
+  }
+
+  async function openFxiaokeSelectPanel(wrapper, control) {
+    const triggers = [
+      wrapper.querySelector(".j-select-input"),
+      wrapper.querySelector(".j-ipt-target"),
+      wrapper.querySelector(".select-tit"),
+      control
+    ].filter((node, index, nodes) => node instanceof HTMLElement && nodes.indexOf(node) === index);
+
+    for (const trigger of triggers) {
+      await nativeClick(trigger);
+      if (trigger instanceof HTMLInputElement) {
+        trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", code: "ArrowDown", bubbles: true }));
+      }
+      const panel = await waitForFxiaokePanel(wrapper, 450);
+      if (panel) {
+        return panel;
+      }
+      triggerChoice(trigger);
+      const fallbackPanel = await waitForFxiaokePanel(wrapper, 250);
+      if (fallbackPanel) {
+        return fallbackPanel;
+      }
+    }
+    return null;
+  }
+
+  async function waitForFxiaokeTiles(wrapper, expectedValues, timeoutMs) {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+      const selected = Array.from(wrapper.querySelectorAll("label.item.checked"))
+        .map((node) => normalizeText(node.textContent || ""));
+      if (selected.length === expectedValues.length && expectedValues.every((value) => selected.includes(value))) {
+        return true;
+      }
+      await wait(60);
+    }
+    return false;
+  }
+
+  async function fillFxiaokeLookup(wrapper, desired) {
+    const input = wrapper.querySelector(".j-search-ipt");
+    if (!(input instanceof HTMLInputElement) || input.disabled) {
+      return { ok: false, reason: "lookup-disabled" };
+    }
+
+    const nativeApplied = await nativeReplaceText(input, desired);
+    if (!nativeApplied) {
+      triggerChoice(input);
+      setControlValue(input, desired);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+
+    const option = await findFxiaokePanelOption(wrapper, desired, 1800, ".j-search-item");
+    if (!option) {
+      return { ok: false, reason: "lookup-option-not-found" };
+    }
+    await nativeClick(option);
+    const ok = await waitForFxiaokeValue(wrapper, desired, 1500);
+    return { ok, reason: ok ? "" : "lookup-not-confirmed" };
+  }
+
+  async function waitForFxiaokePanel(wrapper, timeoutMs) {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+      const panel = Array.from(wrapper.querySelectorAll(".crm-w-panel, .list-menu"))
+        .find((node) => node instanceof HTMLElement && isVisible(node));
+      if (panel) {
+        return panel;
+      }
+      await wait(60);
+    }
+    return null;
+  }
+
+  async function findFxiaokePanelOption(root, desired, timeoutMs, selector = "li[action-type='itemclick']") {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+      const option = Array.from(root.querySelectorAll(selector))
+        .find((node) => node instanceof HTMLElement && isVisible(node) && normalizeText(node.textContent || "") === desired);
+      if (option) {
+        return option;
+      }
+      await wait(60);
+    }
+    return null;
+  }
+
+  async function findFxiaokeOption(desired, timeoutMs) {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+      const matches = Array.from(document.querySelectorAll("[role='option'], li, label.item, .select-item, .option, .j-option, .j-select-item, .j-search-item, .crm-w-select-item"))
+        .filter((node) => node instanceof HTMLElement && isVisible(node))
+        .filter((node) => normalizeText(node.textContent || "") === desired);
+      if (matches.length) {
+        matches.sort((a, b) => getElementDepth(b) - getElementDepth(a));
+        return matches[0];
+      }
+      await wait(80);
+    }
+    return null;
+  }
+
+  async function waitForFxiaokeValue(wrapper, expected, timeoutMs) {
+    const wanted = normalizeText(String(expected ?? ""));
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+      const control = getFxiaokeControl(wrapper);
+      const values = [
+        getFxiaokeDisplayValue(wrapper, control),
+        getNodeDisplayValue(control),
+        normalizeText(wrapper.querySelector(".crm-action-fakeiptwrap")?.textContent || "")
+      ];
+      if (values.some((value) => normalizeText(value) === wanted)) {
+        return true;
+      }
+      await wait(80);
+    }
+    return false;
+  }
+
+  async function fillGenericPage(preset) {
     const template = normalizePreset(preset);
     const failures = [];
     const earlySimpleFields = template.simpleFields.filter(isStructuralField);
@@ -496,6 +876,7 @@
 
     return {
       ok: true,
+      adapter: "generic",
       failures
     };
   }
@@ -504,6 +885,7 @@
     if (preset?.version === TEMPLATE_VERSION) {
       return {
         version: TEMPLATE_VERSION,
+        adapterType: getAdapterType(preset),
         simpleFields: Array.isArray(preset.simpleFields) ? preset.simpleFields : [],
         groups: Array.isArray(preset.groups) ? preset.groups : []
       };
@@ -511,9 +893,14 @@
 
     return {
       version: TEMPLATE_VERSION,
+      adapterType: getAdapterType(preset),
       simpleFields: Array.isArray(preset?.fields) ? preset.fields : [],
       groups: []
     };
+  }
+
+  function getAdapterType(preset) {
+    return preset?.adapterType === "fxiaoke" ? "fxiaoke" : "generic";
   }
 
   async function fillGroup(group) {
@@ -1235,6 +1622,57 @@
     node.click();
   }
 
+  async function nativeClick(node) {
+    const point = getElementCenter(node);
+    if (!point) {
+      triggerChoice(node);
+      return false;
+    }
+
+    try {
+      const response = await chrome.runtime.sendMessage({ type: "fxNativeClick", ...point });
+      if (response?.ok) {
+        return true;
+      }
+    } catch (_error) {
+      // The standard DOM event path remains available when debugger access is unavailable.
+    }
+    triggerChoice(node);
+    return false;
+  }
+
+  async function nativeReplaceText(node, value) {
+    const point = getElementCenter(node);
+    if (!point) {
+      return false;
+    }
+
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: "fxNativeReplaceText",
+        ...point,
+        text: value == null ? "" : String(value)
+      });
+      return response?.ok === true;
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function getElementCenter(node) {
+    if (!(node instanceof HTMLElement)) {
+      return null;
+    }
+    const rect = node.getBoundingClientRect();
+    if (!rect.width || !rect.height) {
+      return null;
+    }
+    return {
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2
+    };
+  }
+
   function findRepeatableTable(group) {
     if (group.tableSelector) {
       const direct = safeQuery(group.tableSelector);
@@ -1742,6 +2180,46 @@
     }
 
     return fields;
+  }
+
+  function collectFxiaokeDiagnostics(template) {
+    const fields = flattenTemplate(template);
+    const components = fields.reduce((summary, field) => {
+      const key = field.componentType || "native";
+      summary[key] = (summary[key] || 0) + 1;
+      return summary;
+    }, {});
+
+    const clickableCandidates = Array.from(document.querySelectorAll("button, [role='button'], [role='option'], [role='menuitem'], a"))
+      .filter((node) => node instanceof HTMLElement && isVisible(node))
+      .slice(0, 80)
+      .map((node) => ({
+        tag: node.tagName.toLowerCase(),
+        role: node.getAttribute("role") || "",
+        text: normalizeText(node.textContent || "").slice(0, 80),
+        selector: buildSelector(node)
+      }));
+
+    const wrappers = fields
+      .filter((field) => field.wrapperId || field.wrapperSelector || field.fxiaokeApiName)
+      .slice(0, 80)
+      .map((field) => ({
+        label: getFieldTitle(field),
+        componentType: field.componentType,
+        fxiaokeApiName: field.fxiaokeApiName || "",
+        wrapperId: field.wrapperId,
+        wrapperSelector: field.wrapperSelector
+      }));
+
+    return {
+      purpose: "fxiaoke-adapter-bootstrap",
+      note: "First-stage diagnostics only. Use these candidates with a real Fxiaoke snapshot to add precise adapter rules.",
+      fieldCount: fields.length,
+      groupCount: Array.isArray(template.groups) ? template.groups.length : 0,
+      components,
+      wrappers,
+      clickableCandidates
+    };
   }
 
   function safeQuery(selector) {
