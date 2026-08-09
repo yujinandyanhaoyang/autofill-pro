@@ -19,13 +19,12 @@ async function runNativeInteraction(tabId, message) {
 
     if (message.type === "fxNativeReplaceText") {
       await sendMouseClick(tabId, message.x, message.y);
-      await sendKey(tabId, "rawKeyDown", "a", "KeyA", 2);
-      await sendKey(tabId, "keyUp", "a", "KeyA", 2);
-      await sendKey(tabId, "rawKeyDown", "Backspace", "Backspace");
-      await sendKey(tabId, "keyUp", "Backspace", "Backspace");
-      await debuggerCommand(tabId, "Input.insertText", { text: String(message.text || "") });
-      await sendKey(tabId, "rawKeyDown", "Tab", "Tab");
-      await sendKey(tabId, "keyUp", "Tab", "Tab");
+      await replaceFocusedText(tabId, message.text);
+      return;
+    }
+
+    if (message.type === "fxNativeTypeText") {
+      await replaceFocusedText(tabId, message.text);
       return;
     }
 
@@ -33,6 +32,16 @@ async function runNativeInteraction(tabId, message) {
   } finally {
     await debuggerCommand(tabId, "detach");
   }
+}
+
+async function replaceFocusedText(tabId, text) {
+  await sendKey(tabId, "rawKeyDown", "a", "KeyA", 2);
+  await sendKey(tabId, "keyUp", "a", "KeyA", 2);
+  await sendKey(tabId, "rawKeyDown", "Backspace", "Backspace");
+  await sendKey(tabId, "keyUp", "Backspace", "Backspace");
+  await debuggerCommand(tabId, "Input.insertText", { text: String(text || "") });
+  await sendKey(tabId, "rawKeyDown", "Tab", "Tab");
+  await sendKey(tabId, "keyUp", "Tab", "Tab");
 }
 
 function debuggerCommand(tabId, method, params) {

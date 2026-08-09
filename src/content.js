@@ -156,6 +156,9 @@
     if (fieldType === "date" || wrapper.querySelector(".el-date-editor")) {
       return "fxiaoke-date";
     }
+    if (fieldType === "currency" || wrapper.querySelector(".crm-action-fakeiptwrap")) {
+      return "fxiaoke-currency";
+    }
     if (wrapper.querySelector(".crm-field-selecttile")) {
       return "fxiaoke-tiled";
     }
@@ -582,7 +585,7 @@
         if (result.ok) {
           outcomes.push({ field: getFieldTitle(field), apiName: field.fxiaokeApiName || "", status: "filled" });
           await waitForDomSettled(120);
-        } else if (attempt < 2 && (result.reason === "disabled" || result.reason === "not-found")) {
+        } else if (attempt < 2 && shouldRetryFxiaokeField(result.reason)) {
           retry.push(field);
         } else {
           outcomes.push({ field: getFieldTitle(field), apiName: field.fxiaokeApiName || "", status: "failed", reason: result.reason || "not-applied" });
@@ -606,6 +609,10 @@
     };
   }
 
+  function shouldRetryFxiaokeField(reason) {
+    return reason === "disabled" || reason === "not-found" || reason === "lookup-option-not-found";
+  }
+
   function isFxiaokeFieldEnabled(field) {
     if (field.enabled === false) {
       return false;
@@ -617,7 +624,7 @@
     if (field.componentType === "fxiaoke-lookup") {
       return 0;
     }
-    if (field.componentType === "fxiaoke-text" || field.componentType === "fxiaoke-date") {
+    if (field.componentType === "fxiaoke-text" || field.componentType === "fxiaoke-date" || field.componentType === "fxiaoke-currency") {
       return 1;
     }
     if (field.componentType === "fxiaoke-select") {
@@ -646,6 +653,10 @@
       return fillFxiaokeSelect(wrapper, control, field.value);
     }
 
+    if (field.componentType === "fxiaoke-currency") {
+      return fillFxiaokeCurrency(wrapper, control, field.value);
+    }
+
     const nativeApplied = await nativeReplaceText(control, field.value);
     if (nativeApplied) {
       const nativeOk = await waitForFxiaokeValue(wrapper, field.value, 1200);
@@ -657,6 +668,23 @@
     dispatchFieldEvents(control);
     const ok = await waitForFxiaokeValue(wrapper, field.value, 1000);
     return { ok, reason: ok ? "" : "value-not-applied" };
+  }
+
+  async function fillFxiaokeCurrency(wrapper, control, value) {
+    const overlay = wrapper.querySelector(".crm-action-fakeiptwrap");
+    if (overlay) {
+      await nativeClick(overlay);
+      await wait(80);
+      const nativeApplied = await nativeTypeText(value);
+      if (nativeApplied && await waitForFxiaokeValue(wrapper, value, 1400)) {
+        return { ok: true, reason: "" };
+      }
+    }
+
+    setControlValue(control, value);
+    dispatchFieldEvents(control);
+    const ok = await waitForFxiaokeValue(wrapper, value, 1200);
+    return { ok, reason: ok ? "" : "currency-not-applied" };
   }
 
   function findFxiaokeWrapper(field) {
@@ -1651,6 +1679,18 @@
       const response = await chrome.runtime.sendMessage({
         type: "fxNativeReplaceText",
         ...point,
+        text: value == null ? "" : String(value)
+      });
+      return response?.ok === true;
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  async function nativeTypeText(value) {
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: "fxNativeTypeText",
         text: value == null ? "" : String(value)
       });
       return response?.ok === true;
