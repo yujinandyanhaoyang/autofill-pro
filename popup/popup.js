@@ -213,6 +213,11 @@ async function fillSelectedPreset() {
     setStatus(result.error || "Fill failed.", true);
     return;
   }
+  if (result?.blockedReason) {
+    const failed = (result.outcomes || []).find((item) => item.status === "failed");
+    setStatus(`Stopped before dependent fields: ${failed?.field || "customer lookup"} (${result.blockedReason}).`, true);
+    return;
+  }
   if (result?.failures?.length) {
     const details = (result.outcomes || [])
       .filter((item) => item.status === "failed")

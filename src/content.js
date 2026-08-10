@@ -149,7 +149,17 @@
         .map((node) => normalizeText(node.textContent || ""))
         .filter(Boolean);
     }
+    if (wrapper.querySelector(".crm-action-field-lookup")) {
+      return getFxiaokeSelectedLookupValue(wrapper);
+    }
     return getFxiaokeDisplayValue(wrapper, control);
+  }
+
+  function getFxiaokeSelectedLookupValue(wrapper) {
+    const selected = Array.from(wrapper.querySelectorAll(".j-search-item.r-selected"))
+      .map((node) => getFxiaokeOptionValue(node))
+      .find(Boolean);
+    return selected || "";
   }
 
   function getFxiaokeComponentType(fieldType, wrapper) {
@@ -569,12 +579,33 @@
   async function fillFxiaokePage(preset) {
     const template = normalizePreset(preset);
     const outcomes = [];
-    const pending = template.simpleFields
+    const enabledFields = template.simpleFields
       .filter((field) => isFxiaokeFieldEnabled(field))
       .sort((left, right) => getFxiaokeFillWeight(left) - getFxiaokeFillWeight(right));
     const skipped = template.simpleFields
       .filter((field) => !isFxiaokeFieldEnabled(field))
       .map((field) => ({ field: getFieldTitle(field), apiName: field.fxiaokeApiName || "", status: "skipped", reason: "not-enabled" }));
+
+    const accountFields = enabledFields.filter((field) => field.fxiaokeApiName === "account_id");
+    const remainingFields = enabledFields.filter((field) => field.fxiaokeApiName !== "account_id");
+
+    // Fxiaoke reconfigures the opportunity form after a customer is selected.
+    // Do not write dependent values until that state transition is confirmed.
+    for (const field of accountFields) {
+      const result = await fillFxiaokeField(field);
+      if (!result.ok) {
+        outcomes.push({ field: getFieldTitle(field), apiName: field.fxiaokeApiName, status: "failed", reason: result.reason || "account-not-confirmed" });
+        return buildFxiaokeFillResult(outcomes, skipped, template, remainingFields, "account-not-confirmed");
+      }
+      outcomes.push({ field: getFieldTitle(field), apiName: field.fxiaokeApiName, status: "filled" });
+      const settled = await waitForFxiaokeFormRefresh(5000);
+      if (!settled) {
+        outcomes.push({ field: getFieldTitle(field), apiName: field.fxiaokeApiName, status: "failed", reason: "account-form-not-ready" });
+        return buildFxiaokeFillResult(outcomes, skipped, template, remainingFields, "account-form-not-ready");
+      }
+    }
+
+    const pending = remainingFields;
 
     for (let attempt = 0; pending.length && attempt < 3; attempt += 1) {
       const retry = [];
@@ -597,14 +628,25 @@
       }
     }
 
-    const failures = outcomes.filter((item) => item.status === "failed").map((item) => item.field);
+    return buildFxiaokeFillResult(outcomes, skipped, template);
+  }
 
+  function buildFxiaokeFillResult(outcomes, skipped, template, blockedFields = [], blockedReason = "") {
+    const blocked = blockedFields.map((field) => ({
+      field: getFieldTitle(field),
+      apiName: field.fxiaokeApiName || "",
+      status: "skipped",
+      reason: blockedReason
+    }));
+    const allOutcomes = outcomes.concat(blocked);
+    const failures = allOutcomes.filter((item) => item.status === "failed").map((item) => item.field);
     return {
       ok: true,
       adapter: "fxiaoke",
       failures,
-      outcomes,
+      outcomes: allOutcomes,
       skipped,
+      blockedReason,
       diagnostics: collectFxiaokeDiagnostics(template)
     };
   }
@@ -621,7 +663,7 @@
   }
 
   function getFxiaokeFillWeight(field) {
-    if (field.componentType === "fxiaoke-lookup") {
+    if (field.fxiaokeApiName === "account_id") {
       return 0;
     }
     if (field.componentType === "fxiaoke-text" || field.componentType === "fxiaoke-date" || field.componentType === "fxiaoke-currency") {
@@ -630,7 +672,10 @@
     if (field.componentType === "fxiaoke-select") {
       return 2;
     }
-    return 3;
+    if (field.componentType === "fxiaoke-tiled") {
+      return 3;
+    }
+    return 4;
   }
 
   async function fillFxiaokeField(field) {
@@ -673,7 +718,7 @@
   async function fillFxiaokeCurrency(wrapper, control, value) {
     const overlay = wrapper.querySelector(".crm-action-fakeiptwrap");
     if (overlay) {
-      await nativeClick(overlay);
+      control.focus({ preventScroll: true });
       await wait(80);
       const nativeApplied = await nativeTypeText(value);
       if (nativeApplied && await waitForFxiaokeValue(wrapper, value, 1400)) {
@@ -792,21 +837,85 @@
       return { ok: false, reason: "lookup-disabled" };
     }
 
-    const nativeApplied = await nativeReplaceText(input, desired);
+    const resolvedDesired = resolveFxiaokeLookupValue(wrapper, desired);
+
+    if (hasFxiaokeLookupSelection(wrapper, resolvedDesired)) {
+      return { ok: true, reason: "already-selected" };
+    }
+
+    // Lookup search must remain focused until a result is explicitly selected.
+    // Blurring with Tab makes Fxiaoke validate the partial query as an invalid value.
+    const nativeApplied = await nativeReplaceText(input, resolvedDesired, { commit: false });
     if (!nativeApplied) {
       triggerChoice(input);
-      setControlValue(input, desired);
+      setControlValue(input, resolvedDesired);
       input.dispatchEvent(new Event("input", { bubbles: true }));
       input.dispatchEvent(new Event("change", { bubbles: true }));
     }
 
-    const option = await findFxiaokePanelOption(wrapper, desired, 1800, ".j-search-item");
+    const option = await findFxiaokePanelOption(wrapper, resolvedDesired, 4000, ".j-search-item");
     if (!option) {
       return { ok: false, reason: "lookup-option-not-found" };
     }
     await nativeClick(option);
-    const ok = await waitForFxiaokeValue(wrapper, desired, 1500);
+    const ok = await waitForFxiaokeLookupSelection(wrapper, resolvedDesired, 2200);
     return { ok, reason: ok ? "" : "lookup-not-confirmed" };
+  }
+
+  function resolveFxiaokeLookupValue(wrapper, desired) {
+    const wanted = normalizeText(desired);
+    const candidates = Array.from(wrapper.querySelectorAll(".j-search-item [data-title]"))
+      .map((node) => normalizeText(node.getAttribute("data-title") || ""))
+      .filter(Boolean);
+    if (candidates.includes(wanted)) {
+      return wanted;
+    }
+    return candidates.find((candidate) => wanted.length > candidate.length
+      && wanted.length % candidate.length === 0
+      && candidate.repeat(wanted.length / candidate.length) === wanted) || wanted;
+  }
+
+  function hasFxiaokeLookupSelection(wrapper, desired) {
+    const wanted = normalizeText(desired);
+    return Array.from(wrapper.querySelectorAll(".j-search-item.r-selected"))
+      .some((node) => getFxiaokeOptionValue(node) === wanted);
+  }
+
+  async function waitForFxiaokeLookupSelection(wrapper, desired, timeoutMs) {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+      if (hasFxiaokeLookupSelection(wrapper, desired)
+        && !Array.from(wrapper.querySelectorAll(".fm-error")).some((node) => isVisible(node))) {
+        return true;
+      }
+      await wait(80);
+    }
+    return false;
+  }
+
+  async function waitForFxiaokeFormRefresh(timeoutMs) {
+    const startedAt = Date.now();
+    let stableSince = 0;
+    let lastSignature = "";
+    while (Date.now() - startedAt < timeoutMs) {
+      const signature = Array.from(document.querySelectorAll(".j-comp-wrap[data-apiname]"))
+        .filter((node) => isVisible(node))
+        .map((node) => `${node.getAttribute("data-apiname")}:${node.classList.contains("field-comp-disabled")}`)
+        .join("|");
+      if (signature && signature === lastSignature) {
+        if (!stableSince) {
+          stableSince = Date.now();
+        }
+        if (Date.now() - stableSince >= 500) {
+          return true;
+        }
+      } else {
+        lastSignature = signature;
+        stableSince = 0;
+      }
+      await wait(100);
+    }
+    return false;
   }
 
   async function waitForFxiaokePanel(wrapper, timeoutMs) {
@@ -826,13 +935,20 @@
     const startedAt = Date.now();
     while (Date.now() - startedAt < timeoutMs) {
       const option = Array.from(root.querySelectorAll(selector))
-        .find((node) => node instanceof HTMLElement && isVisible(node) && normalizeText(node.textContent || "") === desired);
+        .find((node) => node instanceof HTMLElement && isVisible(node) && getFxiaokeOptionValue(node) === desired);
       if (option) {
         return option;
       }
       await wait(60);
     }
     return null;
+  }
+
+  function getFxiaokeOptionValue(node) {
+    const titled = Array.from(node.querySelectorAll("[data-title]"))
+      .map((child) => normalizeText(child.getAttribute("data-title") || ""))
+      .find(Boolean);
+    return titled || normalizeText(node.textContent || "");
   }
 
   async function findFxiaokeOption(desired, timeoutMs) {
@@ -1669,7 +1785,7 @@
     return false;
   }
 
-  async function nativeReplaceText(node, value) {
+  async function nativeReplaceText(node, value, options = {}) {
     const point = getElementCenter(node);
     if (!point) {
       return false;
@@ -1679,7 +1795,8 @@
       const response = await chrome.runtime.sendMessage({
         type: "fxNativeReplaceText",
         ...point,
-        text: value == null ? "" : String(value)
+        text: value == null ? "" : String(value),
+        commit: options.commit !== false
       });
       return response?.ok === true;
     } catch (_error) {

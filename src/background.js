@@ -19,7 +19,7 @@ async function runNativeInteraction(tabId, message) {
 
     if (message.type === "fxNativeReplaceText") {
       await sendMouseClick(tabId, message.x, message.y);
-      await replaceFocusedText(tabId, message.text);
+      await replaceFocusedText(tabId, message.text, message.commit !== false);
       return;
     }
 
@@ -34,12 +34,15 @@ async function runNativeInteraction(tabId, message) {
   }
 }
 
-async function replaceFocusedText(tabId, text) {
+async function replaceFocusedText(tabId, text, commit = true) {
   await sendKey(tabId, "rawKeyDown", "a", "KeyA", 2);
   await sendKey(tabId, "keyUp", "a", "KeyA", 2);
   await sendKey(tabId, "rawKeyDown", "Backspace", "Backspace");
   await sendKey(tabId, "keyUp", "Backspace", "Backspace");
   await debuggerCommand(tabId, "Input.insertText", { text: String(text || "") });
+  if (!commit) {
+    return;
+  }
   await sendKey(tabId, "rawKeyDown", "Tab", "Tab");
   await sendKey(tabId, "keyUp", "Tab", "Tab");
 }

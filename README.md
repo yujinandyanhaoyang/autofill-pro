@@ -37,7 +37,9 @@ If you captured presets before the structured template upgrade, recapture them. 
 
 ## Fxiaoke workflow
 
-Fxiaoke edit pages are not identified by URL in this branch. Create or select a `Fxiaoke manual fill` profile, then click `Fill page` when the form is ready. The adapter fills only enabled, non-empty recorded fields, prioritizes dependent lookup fields, and retries fields that become available after a dependency changes.
+Fxiaoke edit pages are not identified by URL in this branch. Create or select a `Fxiaoke manual fill` profile, then click `Fill page` when the form is ready. The adapter records lookup fields only when Fxiaoke shows a real selected record; it does not save a failed search string as a profile value.
+
+Replay is staged. It confirms the customer lookup first, waits for Fxiaoke to finish rebuilding the dynamic form, then fills normal fields and dependent lookups such as the price book. If the customer cannot be confirmed, replay stops before changing the remaining fields and reports the reason in the popup. This is intentional: continuing would cause Fxiaoke to disable or reset dependent values.
 
 The extension requests Chrome's `debugger` permission so that a manual Fill can send native browser mouse and keyboard input to Fxiaoke widgets. It is used only while a user-triggered `Fill page` operation is running on the active tab; it is never used for automatic filling or background collection.
 
